@@ -1,5 +1,5 @@
 # Agentic Job Finder and Application Assistant
-
+##demo video on youtube:https://youtu.be/2jT2LQv41R8
 A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, matching them against a candidate's resume with an explainable score, and preparing — **never auto-submitting** — job applications on official company career pages.
 
 Built as a full-stack application: a Python/FastAPI backend orchestrating six single-responsibility agents, and a React single-page frontend guiding the user through the workflow end-to-end.
