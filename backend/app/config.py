@@ -1,0 +1,42 @@
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+class Settings(BaseSettings):
+    llm_provider: str = "openai"
+    openai_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
+    ollama_base_url: str = "http://localhost:11434/v1"
+
+    gemini_api_key: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    tavily_api_key: str | None = None
+
+    # Apify (optional) — adds LinkedIn Jobs as an additional job source alongside the
+    # direct-company-careers-page discovery. Billed per result by Apify; unset this and it's
+    # skipped entirely (no error, no cost). Indeed and Naukri were both left out — see
+    # app/services/apify_client.py for why.
+    apify_api_token: str | None = None
+    apify_max_items_per_source: int = 5
+    apify_linkedin_actor: str = "curious_coder~linkedin-jobs-scraper"
+
+    database_url: str = f"sqlite:///{BACKEND_DIR / 'storage' / 'data' / 'app.db'}"
+    resume_storage_dir: str = str(BACKEND_DIR / "storage" / "resumes")
+    screenshot_storage_dir: str = str(BACKEND_DIR / "storage" / "screenshots")
+
+    frontend_origin: str = "http://localhost:5173"
+
+    model_config = SettingsConfigDict(
+        env_file=str(BACKEND_DIR / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+settings = Settings()

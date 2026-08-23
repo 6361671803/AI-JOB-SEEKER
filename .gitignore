@@ -1,0 +1,39 @@
+# Secrets
+.env
+backend/.env
+frontend/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Storage / data (real personal data — resumes, filled application screenshots, the database)
+backend/storage/resumes/*
+!backend/storage/resumes/.gitkeep
+backend/storage/screenshots/*
+!backend/storage/screenshots/.gitkeep
+backend/storage/data/*.db
+backend/storage/data/*.db-journal
+backend/storage/data/*.db-wal
+backend/storage/data/*.db-shm
+
+# Logs
+backend/backend_out.log
+backend/backend_err.log
+frontend/frontend_out.log
+frontend/frontend_err.log
+*.log
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# Editors
+.vscode/
+.DS_Store
+
+# Local Claude Code settings (machine-specific, not project config)
+.claude/settings.local.json
