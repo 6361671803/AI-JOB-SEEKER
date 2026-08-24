@@ -22,7 +22,7 @@ Manually checking dozens of individual company career pages, judging how well ea
 ```
 Resume Upload → Preferences → Company Discovery → Job Discovery → Matching & Ranking
       → User Selects Jobs → ★ Approval #1 → Application Preparation
-      → Final Review → ★ Approval #2 → Application Tracker
+      → Final Review → ★ Approval #2 → Job Marked Submitted
 ```
 
 1. **Resume Upload & Parsing** — extracts structured data (skills, education, experience, projects) from a PDF/DOCX resume without inventing anything not in the source document.
@@ -32,7 +32,8 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison).
 6. **Application Preparation** — auto-fills recognized text/dropdown form fields via Playwright, detecting and safely stopping (touching zero fields) on CAPTCHA, OTP, or login walls. Fields like work authorization and cover letters are never auto-filled — they always require the user's own input. It does **not** reliably attach the resume file to a real application form (most sites use a custom upload widget, not a plain file input) and it never logs in or submits on the user's behalf — see Honest Limitations below.
 7. **Two-Gate Human Approval** — enforced at the backend state-machine level, not just the UI: Approval #1 gates whether any automation runs at all; Approval #2 (an explicit confirmation) gates whether a job is ever marked submitted.
-8. **Application Tracker** — full status history for every job, end to end.
+
+Every job's status (discovery through submission/failure) is persisted in the database throughout, since both approval gates are enforced against it — there is no dedicated tracker page in the UI.
 
 ## Technology Stack
 
