@@ -13,7 +13,6 @@ import JobDiscovery from "./components/JobDiscovery";
 import JobResults from "./components/JobResults";
 import ApplicationApproval from "./components/ApplicationApproval";
 import ApplicationPreparation from "./components/ApplicationPreparation";
-import ApplicationTracker from "./components/ApplicationTracker";
 import "./App.css";
 
 const VIEW = {
@@ -28,7 +27,6 @@ const VIEW = {
   JOBS_FOUND: "JOBS_FOUND",
   APPLICATION_APPROVAL: "APPLICATION_APPROVAL",
   APPLICATION_PREPARATION: "APPLICATION_PREPARATION",
-  APPLICATIONS_TRACKER: "APPLICATIONS_TRACKER",
 };
 
 // Which top-nav item should highlight as active for a given view.
@@ -44,7 +42,6 @@ const NAV_KEY_FOR_VIEW = {
   [VIEW.JOBS_FOUND]: "DISCOVER",
   [VIEW.APPLICATION_APPROVAL]: "APPLICATIONS",
   [VIEW.APPLICATION_PREPARATION]: "APPLICATIONS",
-  [VIEW.APPLICATIONS_TRACKER]: "APPLICATIONS",
 };
 
 function AppContent() {
@@ -107,9 +104,6 @@ function AppContent() {
         else if (jobResult) setView(VIEW.JOBS_FOUND);
         else if (companyResult) setView(VIEW.COMPANIES_FOUND);
         else setView(VIEW.DISCOVER_COMPANIES);
-        break;
-      case "APPLICATIONS":
-        setView(candidate ? VIEW.APPLICATIONS_TRACKER : VIEW.UPLOAD);
         break;
       default:
         break;
@@ -204,10 +198,6 @@ function AppContent() {
         {view === VIEW.APPLICATION_PREPARATION && candidate && (
           <ApplicationPreparation candidateId={candidate.id} selectedJobs={selectedJobs} />
         )}
-
-        {view === VIEW.APPLICATIONS_TRACKER && (candidate ? (
-          <ApplicationTracker candidateId={candidate.id} onBack={() => setView(VIEW.DASHBOARD)} />
-        ) : needsResume)}
       </main>
     </div>
   );

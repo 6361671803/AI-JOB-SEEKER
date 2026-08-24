@@ -3,7 +3,6 @@ import { useState } from "react";
 const NAV_ITEMS = [
   { key: "DASHBOARD", label: "Dashboard" },
   { key: "DISCOVER", label: "Discover Jobs" },
-  { key: "APPLICATIONS", label: "Applications" },
   { key: "RESUME", label: "Resume" },
   { key: "PROFILE", label: "Profile" },
 ];

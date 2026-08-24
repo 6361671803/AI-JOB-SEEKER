@@ -144,16 +144,6 @@ export async function updateReviewFields(candidateId, jobId, fields) {
   return data;
 }
 
-export async function getTracker(candidateId) {
-  const response = await fetch(`${API_BASE_URL}/api/candidate/${candidateId}/tracker`);
-
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.detail || "Fetching the application tracker failed.");
-  }
-  return data;
-}
-
 export async function markSubmitted(candidateId, jobId) {
   const response = await fetch(
     `${API_BASE_URL}/api/candidate/${candidateId}/jobs/${jobId}/mark-submitted`,
