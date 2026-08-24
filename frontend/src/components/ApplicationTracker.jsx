@@ -12,13 +12,6 @@ const STATUS_CLASS = {
   FAILED: "status-failed",
 };
 
-const STAT_TILES = [
-  { statuses: ["SUBMITTED"], label: "Applied" },
-  { statuses: ["PREPARING"], label: "Preparing" },
-  { statuses: ["WAITING_FOR_REVIEW"], label: "Waiting for Review" },
-  { statuses: ["FAILED"], label: "Failed" },
-];
-
 function formatDate(iso) {
   if (!iso) return "—";
   try {
@@ -53,17 +46,6 @@ export default function ApplicationTracker({ candidateId }) {
 
       {tracker && (
         <>
-          <div className="stat-grid">
-            {STAT_TILES.map((tile) => (
-              <div className="stat-tile" key={tile.label} style={{ cursor: "default" }}>
-                <div className="stat-tile-value">
-                  {tile.statuses.reduce((sum, s) => sum + (tracker.status_counts[s] || 0), 0)}
-                </div>
-                <div className="stat-tile-label">{tile.label}</div>
-              </div>
-            ))}
-          </div>
-
           {tracker.entries.length === 0 ? (
             <EmptyState icon="📋" title="No jobs tracked yet">
               <p>Once you discover and select jobs, they'll show up here.</p>
