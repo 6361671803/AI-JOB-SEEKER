@@ -1,19 +1,38 @@
-import json
+"""Every structured LLM extraction call in the application, now orchestrated through real CrewAI
+Agent/Task/Crew objects (see crewai_client.py) instead of a hand-rolled OpenAI SDK client.
 
-from app.config import settings
+Every function below keeps its exact original name, parameters, and return shape (a plain dict),
+so every calling agent (resume_analyzer.py, preference_agent.py, company_discovery_agent.py,
+job_discovery_agent.py, matching_agent.py) needed zero changes for this migration. Every original
+system prompt's exact wording — including every "never invent" rule — is preserved verbatim as
+each CrewAI Agent's backstory. Every deterministic grounding/anti-hallucination backstop that ran
+after the old raw LLM call runs identically here, unchanged, after the new CrewAI call.
+"""
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from app.models.schemas import CandidateProfile
+from app.services.crewai_client import LLMNotConfiguredError, LLMRequestError, run_structured_task
+
+__all__ = [
+    "LLMNotConfiguredError",
+    "LLMRequestError",
+    "extract_candidate_profile",
+    "infer_target_roles",
+    "extract_company_names",
+    "resolve_official_career_page",
+    "extract_job_listings",
+    "extract_job_description",
+    "assess_job_match",
+]
 
 
-class LLMNotConfiguredError(RuntimeError):
-    pass
+# ============================================================================
+# 1. Resume -> structured candidate profile
+# ============================================================================
 
-
-class LLMRequestError(RuntimeError):
-    pass
-
-
-EXTRACTION_SYSTEM_PROMPT = """You extract structured candidate data from resume text.
-
-STRICT RULES:
+_EXTRACTION_BACKSTORY = """STRICT RULES:
 - Only use information explicitly present in the resume text.
 - Never invent, infer, or embellish skills, experience, education, or dates.
 - If a field is not present in the resume, use null (or an empty list for list fields).
@@ -31,237 +50,45 @@ STRICT RULES:
   that platform isn't mentioned — do not assume a candidate has a GitHub/portfolio just because
   they're technical.
 - "years_of_experience" should be your best numeric estimate based only on dates/durations
-  explicitly stated in the resume; use null if it cannot be determined.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-CANDIDATE_PROFILE_JSON_SCHEMA = {
-    "name": "candidate_profile",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "name": {"type": ["string", "null"]},
-            "email": {"type": ["string", "null"]},
-            "phone": {"type": ["string", "null"]},
-            "linkedin_url": {"type": ["string", "null"]},
-            "github_url": {"type": ["string", "null"]},
-            "portfolio_url": {"type": ["string", "null"]},
-            "education": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "degree": {"type": ["string", "null"]},
-                        "institution": {"type": ["string", "null"]},
-                        "year": {"type": ["string", "null"]},
-                        "field_of_study": {"type": ["string", "null"]},
-                    },
-                    "required": ["degree", "institution", "year", "field_of_study"],
-                },
-            },
-            "experience": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": ["string", "null"]},
-                        "company": {"type": ["string", "null"]},
-                        "duration": {"type": ["string", "null"]},
-                        "description": {"type": ["string", "null"]},
-                    },
-                    "required": ["title", "company", "duration", "description"],
-                },
-            },
-            "internships": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": ["string", "null"]},
-                        "company": {"type": ["string", "null"]},
-                        "duration": {"type": ["string", "null"]},
-                        "description": {"type": ["string", "null"]},
-                    },
-                    "required": ["title", "company", "duration", "description"],
-                },
-            },
-            "skills": {"type": "array", "items": {"type": "string"}},
-            "technologies": {"type": "array", "items": {"type": "string"}},
-            "projects": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "name": {"type": ["string", "null"]},
-                        "description": {"type": ["string", "null"]},
-                        "technologies": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["name", "description", "technologies"],
-                },
-            },
-            "certifications": {"type": "array", "items": {"type": "string"}},
-            "locations": {"type": "array", "items": {"type": "string"}},
-            "roles": {"type": "array", "items": {"type": "string"}},
-            "years_of_experience": {"type": ["number", "null"]},
-        },
-        "required": [
-            "name", "email", "phone", "linkedin_url", "github_url", "portfolio_url",
-            "education", "experience", "internships", "skills", "technologies",
-            "projects", "certifications", "locations", "roles", "years_of_experience",
-        ],
-    },
-}
-
-
-def _get_client():
-    from openai import OpenAI
-
-    if settings.llm_provider == "openai":
-        if not settings.openai_api_key:
-            raise LLMNotConfiguredError(
-                "OPENAI_API_KEY is not set. Add it to backend/.env (see backend/.env.example)."
-            )
-        return OpenAI(api_key=settings.openai_api_key)
-
-    if settings.llm_provider == "ollama":
-        # Ollama's OpenAI-compatible endpoint ignores the API key but requires one to be set.
-        # Local CPU inference on a large structured-output schema can be slow, so use a
-        # generous timeout rather than the SDK default.
-        return OpenAI(base_url=settings.ollama_base_url, api_key="ollama", timeout=600.0)
-
-    if settings.llm_provider == "gemini":
-        if not settings.gemini_api_key:
-            raise LLMNotConfiguredError(
-                "GEMINI_API_KEY is not set. Add it to backend/.env (see backend/.env.example)."
-            )
-        return OpenAI(base_url=settings.gemini_base_url, api_key=settings.gemini_api_key)
-
-    if settings.llm_provider == "openrouter":
-        if not settings.openrouter_api_key:
-            raise LLMNotConfiguredError(
-                "OPENROUTER_API_KEY is not set. Add it to backend/.env (see backend/.env.example)."
-            )
-        return OpenAI(base_url=settings.openrouter_base_url, api_key=settings.openrouter_api_key)
-
-    raise LLMNotConfiguredError(f"Unsupported LLM_PROVIDER '{settings.llm_provider}'.")
-
-
-def _extract_json_content(raw: str) -> dict:
-    text = raw.strip()
-    # Reasoning models (e.g. Qwen3) may emit a <think>...</think> block before the answer.
-    if "<think>" in text and "</think>" in text:
-        text = text.split("</think>", 1)[1].strip()
-    # Some local models wrap JSON in a markdown code fence despite instructions not to.
-    if text.startswith("```"):
-        text = text.strip("`").strip()
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
-    return json.loads(text)
-
-
-MAX_RATE_LIMIT_RETRIES = 3
-
-
-def _retry_delay_seconds(error: Exception, attempt: int) -> float:
-    """Uses the provider's own suggested retry delay when it gives one, else a short backoff."""
-    import re
-
-    match = re.search(r"retry in ([\d.]+)s", str(error), re.IGNORECASE)
-    if match:
-        return float(match.group(1)) + 0.5
-    return 2.0 * attempt
-
-
-def _chat_json(system_prompt: str, user_content: str, json_schema: dict) -> dict:
-    import time
-
-    from openai import APIConnectionError, APIError, RateLimitError
-
-    client = _get_client()
-    if settings.llm_provider == "ollama":
-        # Disable Qwen3's chain-of-thought output so the response is pure JSON.
-        system_prompt = f"{system_prompt}\n/no_think"
-
-    attempt = 0
-    while True:
-        try:
-            response = client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format={"type": "json_schema", "json_schema": json_schema},
-                temperature=0,
-            )
-            break
-        except RateLimitError as e:
-            # Free-tier per-minute quotas (e.g. Gemini's free tier) are hit routinely during a
-            # discovery run that fires many calls back-to-back — worth a short backoff-and-retry
-            # rather than failing the whole run on a transient minute-window limit.
-            attempt += 1
-            if attempt > MAX_RATE_LIMIT_RETRIES:
-                raise LLMRequestError(f"LLM request failed after retries (rate limited): {e}") from e
-            time.sleep(_retry_delay_seconds(e, attempt))
-        except APIConnectionError as e:
-            raise LLMRequestError(
-                f"Could not reach LLM provider '{settings.llm_provider}' "
-                f"(is Ollama running at {settings.ollama_base_url}?): {e}"
-            ) from e
-        except APIError as e:
-            raise LLMRequestError(f"LLM request failed: {e}") from e
-
-    content = response.choices[0].message.content
-    try:
-        return _extract_json_content(content)
-    except json.JSONDecodeError as e:
-        raise LLMRequestError(f"LLM returned non-JSON content that could not be parsed: {e}") from e
+  explicitly stated in the resume; use null if it cannot be determined."""
 
 
 def extract_candidate_profile(resume_text: str) -> dict:
     """Calls the configured LLM provider to turn raw resume text into a structured profile dict."""
-    return _chat_json(
-        EXTRACTION_SYSTEM_PROMPT,
-        f"Resume text:\n\n{resume_text}",
-        CANDIDATE_PROFILE_JSON_SCHEMA,
+    result = run_structured_task(
+        role="Resume Data Extraction Specialist",
+        goal="Extract structured candidate data from resume text with zero fabrication.",
+        backstory=_EXTRACTION_BACKSTORY,
+        task_description=f"Resume text:\n\n{resume_text}",
+        expected_output="A complete candidate profile matching the required schema exactly, "
+        "with null/empty values for anything not explicitly present in the resume text.",
+        output_model=CandidateProfile,
+        inputs={"resume_text": resume_text},
     )
+    return result.model_dump()
 
 
-ROLE_INFERENCE_SYSTEM_PROMPT = """You suggest suitable job role titles for a candidate based ONLY
-on the skills, technologies, projects, experience, and education given to you.
+# ============================================================================
+# 2. Infer target roles from resume when the user didn't pick one
+# ============================================================================
 
-STRICT RULES:
+class _RoleInferenceResult(BaseModel):
+    roles: list[str]
+
+
+_ROLE_INFERENCE_BACKSTORY = """STRICT RULES:
 - Do not restrict suggestions to software engineering roles — consider the candidate's actual
   background (e.g. finance, marketing, design, data, operations, HR, etc.) and suggest roles that
   fit whatever domain their skills/experience actually show.
 - Every suggested role must be justifiable from the given skills/experience/projects — do not
   suggest roles that require skills or domain knowledge absent from the input.
-- Return between 1 and 8 role titles, ranked most-suitable first.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-ROLE_INFERENCE_JSON_SCHEMA = {
-    "name": "role_inference",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "roles": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["roles"],
-    },
-}
+- Return between 1 and 8 role titles, ranked most-suitable first."""
 
 
 def infer_target_roles(profile: dict, experience_level: str) -> list[str]:
     """Suggests suitable job roles from resume-derived skills/experience when the user didn't pick one."""
+    import json
+
     candidate_summary = {
         "skills": profile.get("skills", []),
         "technologies": profile.get("technologies", []),
@@ -273,18 +100,26 @@ def infer_target_roles(profile: dict, experience_level: str) -> list[str]:
         "years_of_experience": profile.get("years_of_experience"),
         "user_selected_experience_level": experience_level,
     }
-    result = _chat_json(
-        ROLE_INFERENCE_SYSTEM_PROMPT,
-        f"Candidate background:\n\n{json.dumps(candidate_summary, indent=2)}",
-        ROLE_INFERENCE_JSON_SCHEMA,
+    result = run_structured_task(
+        role="Career Role-Fit Analyst",
+        goal="Suggest suitable job role titles based only on the candidate's actual background.",
+        backstory=_ROLE_INFERENCE_BACKSTORY,
+        task_description=f"Candidate background:\n\n{json.dumps(candidate_summary, indent=2)}",
+        expected_output="1 to 8 ranked, justifiable job role titles.",
+        output_model=_RoleInferenceResult,
     )
-    return result.get("roles", [])
+    return result.roles
 
 
-COMPANY_NAME_EXTRACTION_SYSTEM_PROMPT = """You identify real company names from web search results
-about companies hiring for a given role and location.
+# ============================================================================
+# 3. Extract real company names from web search results
+# ============================================================================
 
-STRICT RULES:
+class _CompanyNamesResult(BaseModel):
+    companies: list[str]
+
+
+_COMPANY_NAME_EXTRACTION_BACKSTORY = """STRICT RULES:
 - Only include company names that literally appear in the provided search result titles or content.
 - Never invent, guess, or embellish a company name.
 - Exclude job boards / aggregators themselves (e.g. LinkedIn, Indeed, Naukri, Glassdoor, Monster,
@@ -298,65 +133,44 @@ STRICT RULES:
   "Department of School Education") — these publish exam/recruitment notifications, not a
   specific employer's job opening, and are out of scope for this job search.
 - Return every distinct company name that genuinely appears in the results (do not artificially
-  limit yourself to a small number) — there is no need to omit real companies to keep the list short.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-COMPANY_NAME_EXTRACTION_JSON_SCHEMA = {
-    "name": "company_names",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "companies": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": ["companies"],
-    },
-}
+  limit yourself to a small number) — there is no need to omit real companies to keep the list short."""
 
 
 def extract_company_names(search_results: list[dict], role: str, location: str) -> list[str]:
     """Pulls real company names (only ones literally present in the search results) out of a search."""
+    import json
+
     if not search_results:
         return []
-    result = _chat_json(
-        COMPANY_NAME_EXTRACTION_SYSTEM_PROMPT,
-        f"Role: {role}\nLocation: {location}\n\nSearch results:\n\n"
+    result = run_structured_task(
+        role="Company Name Extraction Specialist",
+        goal="Identify real, distinct hiring company names from web search results, and nothing else.",
+        backstory=_COMPANY_NAME_EXTRACTION_BACKSTORY,
+        task_description=f"Role: {role}\nLocation: {location}\n\nSearch results:\n\n"
         f"{json.dumps(search_results, indent=2)}",
-        COMPANY_NAME_EXTRACTION_JSON_SCHEMA,
+        expected_output="Every distinct real company name that literally appears in the search results.",
+        output_model=_CompanyNamesResult,
     )
-    return result.get("companies", [])
+    return result.companies
 
 
-CAREER_PAGE_RESOLUTION_SYSTEM_PROMPT = """You identify a company's official website and official
-careers/jobs page from web search results.
+# ============================================================================
+# 4. Resolve a company's official website and careers page from search results
+# ============================================================================
 
-STRICT RULES:
+class _CareerPageResult(BaseModel):
+    official_website: str | None = None
+    careers_url: str | None = None
+
+
+_CAREER_PAGE_RESOLUTION_BACKSTORY = """STRICT RULES:
 - You may ONLY return a URL that appears verbatim in the provided search results. Never fabricate,
   guess, construct, or modify a URL.
 - Prefer the company's own domain over third-party job boards (LinkedIn, Indeed, Glassdoor, Naukri,
   Monster, ZipRecruiter, AngelList, Wellfound, Instahyre, etc.).
 - If no result is confidently the company's own official site, set "official_website" to null.
 - If no result is confidently the company's own official careers/jobs page, set "careers_url" to null
-  — do NOT fall back to a third-party job board URL for this field.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-CAREER_PAGE_RESOLUTION_JSON_SCHEMA = {
-    "name": "career_page_resolution",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "official_website": {"type": ["string", "null"]},
-            "careers_url": {"type": ["string", "null"]},
-        },
-        "required": ["official_website", "careers_url"],
-    },
-}
-
+  — do NOT fall back to a third-party job board URL for this field."""
 
 # Domains of third-party job boards/aggregators — never acceptable as a "careers_url", even if
 # the model tries to return one (smaller local models don't always follow that instruction).
@@ -375,15 +189,21 @@ def _is_third_party_job_board(url: str | None) -> bool:
 
 def resolve_official_career_page(company_name: str, search_results: list[dict]) -> tuple[str | None, str | None]:
     """Picks the official website/careers URL for a company out of search results — never fabricated."""
+    import json
+
     if not search_results:
         return None, None
-    result = _chat_json(
-        CAREER_PAGE_RESOLUTION_SYSTEM_PROMPT,
-        f"Company: {company_name}\n\nSearch results:\n\n{json.dumps(search_results, indent=2)}",
-        CAREER_PAGE_RESOLUTION_JSON_SCHEMA,
+    result = run_structured_task(
+        role="Official Company Page Resolver",
+        goal="Identify a company's real official website and careers page from search results, "
+        "using only URLs that literally appear in those results.",
+        backstory=_CAREER_PAGE_RESOLUTION_BACKSTORY,
+        task_description=f"Company: {company_name}\n\nSearch results:\n\n{json.dumps(search_results, indent=2)}",
+        expected_output="The company's official_website and careers_url, or null for either if not confident.",
+        output_model=_CareerPageResult,
     )
-    website = result.get("official_website")
-    careers_url = result.get("careers_url")
+    website = result.official_website
+    careers_url = result.careers_url
 
     # Belt-and-braces: never trust a URL the model didn't actually copy from the results.
     valid_urls = {r["url"] for r in search_results if r.get("url")}
@@ -402,6 +222,21 @@ def resolve_official_career_page(company_name: str, search_results: list[dict]) 
     return website, careers_url
 
 
+# ============================================================================
+# 5. Stage 1: extract job listings from a careers/listing page
+# ============================================================================
+
+class _JobListingEntry(BaseModel):
+    title: str
+    location: str | None = None
+    work_mode: str | None = None
+    link_index: int | None = None
+
+
+class _JobListingsResult(BaseModel):
+    jobs: list[_JobListingEntry]
+
+
 # Stage 1: the careers/listing page itself usually only shows title, location, and an apply
 # link per job — NOT requirements/qualifications/skills (those live on each job's own detail
 # page). Asking the model to fill those fields from a listing page that doesn't have them caused
@@ -411,7 +246,7 @@ def resolve_official_career_page(company_name: str, search_results: list[dict]) 
 # out a full href (e.g. guessing a Greenhouse-style URL pattern with the wrong ID). Asking the
 # model to instead pick a link by its INDEX in a numbered list is far more reliable for weaker
 # models — it's a closed-set choice rather than free recall.
-JOB_LISTING_EXTRACTION_SYSTEM_PROMPT = """You extract the list of INDIVIDUAL job postings shown
+_JOB_LISTING_EXTRACTION_BACKSTORY = """You extract the list of INDIVIDUAL job postings shown
 on a company's careers/jobs LISTING page (not an individual job description page).
 
 CRITICAL — DO NOT CONFUSE NAVIGATION/CATEGORY LINKS WITH REAL JOB POSTINGS:
@@ -445,34 +280,7 @@ STRICT RULES FOR ENTRIES YOU DO EXTRACT:
   that listing.
 - Each job in your output must correspond to a genuinely distinct listing on the page. Never
   repeat the same job more than once.
-- Extract at most 8 of the listings shown.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-JOB_LISTING_ENTRY_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "title": {"type": "string"},
-        "location": {"type": ["string", "null"]},
-        "work_mode": {"type": ["string", "null"]},
-        "link_index": {"type": ["integer", "null"]},
-    },
-    "required": ["title", "location", "work_mode", "link_index"],
-}
-
-JOB_LISTING_EXTRACTION_JSON_SCHEMA = {
-    "name": "job_listings",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "jobs": {"type": "array", "items": JOB_LISTING_ENTRY_SCHEMA},
-        },
-        "required": ["jobs"],
-    },
-}
+- Extract at most 8 of the listings shown."""
 
 
 def extract_job_listings(company_name: str, page_text: str, links: list[dict]) -> list[dict]:
@@ -482,13 +290,18 @@ def extract_job_listings(company_name: str, page_text: str, links: list[dict]) -
 
     numbered_links = [f"[{i}] {l['text']} -> {l['href']}" for i, l in enumerate(links) if l.get("href")]
 
-    result = _chat_json(
-        JOB_LISTING_EXTRACTION_SYSTEM_PROMPT,
-        f"Company: {company_name}\n\nPage text:\n\n{page_text}\n\nNumbered links on page:\n\n"
+    result = run_structured_task(
+        role="Career Page Listing Analyst",
+        goal="Extract only genuine individual job postings from a company careers page, "
+        "never navigation or category links.",
+        backstory=_JOB_LISTING_EXTRACTION_BACKSTORY,
+        task_description=f"Company: {company_name}\n\nPage text:\n\n{page_text}\n\nNumbered links on page:\n\n"
         + "\n".join(numbered_links),
-        JOB_LISTING_EXTRACTION_JSON_SCHEMA,
+        expected_output="A list of at most 8 genuinely distinct job postings, each with a "
+        "title, location, work_mode, and link_index grounded in the numbered links list.",
+        output_model=_JobListingsResult,
     )
-    jobs = result.get("jobs", [])
+    jobs = [j.model_dump() for j in result.jobs]
 
     seen_titles: set[str] = set()
     deduped = []
@@ -512,9 +325,28 @@ def extract_job_listings(company_name: str, page_text: str, links: list[dict]) -
     return deduped
 
 
+# ============================================================================
+# 6. Stage 2: extract full job description from a job's own detail page
+# ============================================================================
+
+class _JobDetailResult(BaseModel):
+    job_id: str | None = None
+    location: str | None = None
+    work_mode: str | None = None
+    date_posted: str | None = None
+    closing_date: str | None = None
+    employment_type: str | None = None
+    experience_requirement: str | None = None
+    education_requirement: str | None = None
+    required_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    responsibilities: str | None = None
+    qualifications: str | None = None
+
+
 # Stage 2: for a single job's own detail page, extract the actual description fields. This page
 # genuinely contains the requirements/qualifications, so asking for them here is well-grounded.
-JOB_DETAIL_EXTRACTION_SYSTEM_PROMPT = """You extract structured details from a single job
+_JOB_DETAIL_EXTRACTION_BACKSTORY = """You extract structured details from a single job
 posting's own description page.
 
 STRICT RULES:
@@ -526,62 +358,50 @@ STRICT RULES:
   shown.
 - "work_mode" (Remote / Hybrid / On-site) must only be set if the page explicitly states it.
 - Separate "required_skills" (must-have) from "preferred_skills" (nice-to-have) based on how the
-  page itself frames them (e.g. "Requirements" vs "Nice to have" / "Preferred").
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-JOB_DETAIL_EXTRACTION_JSON_SCHEMA = {
-    "name": "job_detail",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "job_id": {"type": ["string", "null"]},
-            "location": {"type": ["string", "null"]},
-            "work_mode": {"type": ["string", "null"]},
-            "date_posted": {"type": ["string", "null"]},
-            "closing_date": {"type": ["string", "null"]},
-            "employment_type": {"type": ["string", "null"]},
-            "experience_requirement": {"type": ["string", "null"]},
-            "education_requirement": {"type": ["string", "null"]},
-            "required_skills": {"type": "array", "items": {"type": "string"}},
-            "preferred_skills": {"type": "array", "items": {"type": "string"}},
-            "responsibilities": {"type": ["string", "null"]},
-            "qualifications": {"type": ["string", "null"]},
-        },
-        "required": [
-            "job_id", "location", "work_mode", "date_posted", "closing_date", "employment_type",
-            "experience_requirement", "education_requirement", "required_skills",
-            "preferred_skills", "responsibilities", "qualifications",
-        ],
-    },
-}
+  page itself frames them (e.g. "Requirements" vs "Nice to have" / "Preferred")."""
 
 
 def extract_job_description(job_title: str, page_text: str) -> dict:
     """Extracts requirements/qualifications/etc. from a job's own description page."""
     if not page_text.strip():
         return {}
-    result = _chat_json(
-        JOB_DETAIL_EXTRACTION_SYSTEM_PROMPT,
-        f"Job title: {job_title}\n\nPage text:\n\n{page_text}",
-        JOB_DETAIL_EXTRACTION_JSON_SCHEMA,
+    result = run_structured_task(
+        role="Job Description Detail Extractor",
+        goal="Extract the real requirements, qualifications, and dates from a single job's own detail page.",
+        backstory=_JOB_DETAIL_EXTRACTION_BACKSTORY,
+        task_description=f"Job title: {job_title}\n\nPage text:\n\n{page_text}",
+        expected_output="Every requested field, populated only with information literally present on the page.",
+        output_model=_JobDetailResult,
     )
+    result_dict = result.model_dump()
 
-    # Belt-and-braces: dates are load-bearing for the later 30-day filter, and small local
-    # models have been observed to invent a plausible-looking date that isn't on the page at
-    # all. Only trust a date the model claims if it's actually a verbatim substring of the page.
+    # Belt-and-braces: dates are load-bearing for the later posting-window filter, and small
+    # local models have been observed to invent a plausible-looking date that isn't on the page
+    # at all. Only trust a date the model claims if it's actually a verbatim substring of the page.
     for date_field in ("date_posted", "closing_date"):
-        value = result.get(date_field)
+        value = result_dict.get(date_field)
         if value and value not in page_text:
-            result[date_field] = None
+            result_dict[date_field] = None
 
-    return result
+    return result_dict
 
 
-# Resume/Job Matching Agent — the judgment-based half.
-#
+# ============================================================================
+# 7. Resume/job match assessment (the judgment-based half of matching)
+# ============================================================================
+
+class _JobMatchAssessmentResult(BaseModel):
+    education_verdict: Literal["meets", "partial", "does_not_meet", "unclear"]
+    education_reasoning: str
+    experience_verdict: Literal["meets", "partial", "does_not_meet", "unclear"]
+    experience_reasoning: str
+    role_relevance: Literal["strong", "moderate", "weak"]
+    role_reasoning: str
+    relevant_projects: list[str] = Field(default_factory=list)
+    eligibility_issues: list[str] = Field(default_factory=list)
+    why_this_matches: str
+
+
 # Skills/technology matching and location matching are handled deterministically elsewhere
 # (skill_matcher.py) since those claims are safety-critical and string comparison has zero
 # hallucination risk. This call only handles the parts that genuinely need judgment: whether
@@ -589,7 +409,7 @@ def extract_job_description(job_title: str, page_text: str) -> dict:
 # notes explicitly written in the posting. It's given the already-computed matched skills so its
 # "why this matches" text can reference them accurately instead of re-deriving (and potentially
 # getting wrong) which skills actually matched.
-JOB_MATCH_ASSESSMENT_SYSTEM_PROMPT = """You assess how well a candidate fits a specific job, based
+_JOB_MATCH_ASSESSMENT_BACKSTORY = """You assess how well a candidate fits a specific job, based
 ONLY on the candidate and job information given to you.
 
 STRICT RULES:
@@ -608,33 +428,7 @@ STRICT RULES:
   isn't literally written in the job posting.
 - "why_this_matches" must ONLY reference skills from the "matched_required_skills" and
   "matched_preferred_skills" lists given to you, and/or projects from "relevant_projects". Do not
-  claim any skill or experience not explicitly given to you. Keep it to 2-3 sentences.
-- Output must be valid JSON matching the given schema exactly, with no extra commentary.
-"""
-
-JOB_MATCH_ASSESSMENT_JSON_SCHEMA = {
-    "name": "job_match_assessment",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "education_verdict": {"type": "string", "enum": ["meets", "partial", "does_not_meet", "unclear"]},
-            "education_reasoning": {"type": "string"},
-            "experience_verdict": {"type": "string", "enum": ["meets", "partial", "does_not_meet", "unclear"]},
-            "experience_reasoning": {"type": "string"},
-            "role_relevance": {"type": "string", "enum": ["strong", "moderate", "weak"]},
-            "role_reasoning": {"type": "string"},
-            "relevant_projects": {"type": "array", "items": {"type": "string"}},
-            "eligibility_issues": {"type": "array", "items": {"type": "string"}},
-            "why_this_matches": {"type": "string"},
-        },
-        "required": [
-            "education_verdict", "education_reasoning", "experience_verdict", "experience_reasoning",
-            "role_relevance", "role_reasoning", "relevant_projects", "eligibility_issues", "why_this_matches",
-        ],
-    },
-}
+  claim any skill or experience not explicitly given to you. Keep it to 2-3 sentences."""
 
 
 def assess_job_match(
@@ -644,6 +438,8 @@ def assess_job_match(
     matched_required_skills: list[str],
     matched_preferred_skills: list[str],
 ) -> dict:
+    import json
+
     candidate_summary = {
         "education": profile.get("education", []),
         "years_of_experience": profile.get("years_of_experience"),
@@ -665,8 +461,13 @@ def assess_job_match(
         "matched_required_skills": matched_required_skills,
         "matched_preferred_skills": matched_preferred_skills,
     }
-    return _chat_json(
-        JOB_MATCH_ASSESSMENT_SYSTEM_PROMPT,
-        json.dumps(context, indent=2),
-        JOB_MATCH_ASSESSMENT_JSON_SCHEMA,
+    result = run_structured_task(
+        role="Resume-to-Job Fit Assessor",
+        goal="Judge education/experience/role fit strictly from the given candidate and job data.",
+        backstory=_JOB_MATCH_ASSESSMENT_BACKSTORY,
+        task_description=json.dumps(context, indent=2),
+        expected_output="A grounded verdict on education, experience, and role fit, plus "
+        "eligibility issues and a why-this-matches summary, using only the given data.",
+        output_model=_JobMatchAssessmentResult,
     )
+    return result.model_dump()

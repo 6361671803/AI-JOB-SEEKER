@@ -2,7 +2,7 @@
 
 A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, matching them against a candidate's resume with an explainable score, and preparing — **never auto-submitting** — job applications on official company career pages.
 
-Built as a full-stack application: a Python/FastAPI backend orchestrating six single-responsibility agents, and a React single-page frontend guiding the user through the workflow end-to-end.
+Built as a full-stack application: a Python/FastAPI backend orchestrating six single-responsibility agents through **CrewAI** (real `Agent`/`Task`/`Crew` objects, not a hand-rolled prompt wrapper), and a React single-page frontend guiding the user through the workflow end-to-end.
 
 ## Why This Exists
 
@@ -39,8 +39,9 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.10, FastAPI, Uvicorn, SQLAlchemy + SQLite |
+| Agent Framework | **CrewAI** — every structured LLM call runs as a real `Agent` + `Task` inside a `Crew`, with `output_pydantic` enforcing the response shape |
 | Resume Parsing | pypdf, python-docx |
-| LLM (chat) | Swappable via one env var: Google Gemini, OpenRouter, OpenAI, or local Ollama — one OpenAI-compatible client for all four |
+| LLM (chat) | Swappable via one env var: Google Gemini, OpenRouter, OpenAI, or local Ollama — routed through CrewAI's own provider layer (native for Gemini/OpenAI, LiteLLM-backed for OpenRouter/Ollama) |
 | LLM (embeddings) | Google Gemini `gemini-embedding-001`, always used for semantic matching regardless of the chat provider |
 | Web Search | Tavily Search API |
 | Additional Job Source | Apify (LinkedIn actor), optional and opt-in |
@@ -49,6 +50,7 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 
 ## Key Engineering Decisions
 
+- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the two approval gates below stay fully deterministic.
 - **JSON-schema-constrained LLM extraction** — every LLM call forces strict, schema-valid JSON output, never free-form prose.
 - **Deterministic anti-hallucination backstops layered under every LLM call** — whole-word skill matching, URL grounding (a link must literally appear on the rendered page), date grounding (a date must be a verbatim substring of the page text), a hard-coded third-party job-board domain blocklist, and a place-name filter.
 - **Two-stage job extraction** — listing-page fields (title/location/link) are extracted separately from detail-page fields (requirements/skills), since asking one call to guess fields that aren't actually on that page caused fabricated data during development.
@@ -70,7 +72,8 @@ backend/
       matching_agent.py
       application_preparation_agent.py
     services/                  # Reusable, LLM-agnostic logic
-      llm_client.py            # Every prompt/schema, provider abstraction
+      llm_client.py            # Every prompt/schema — calls into crewai_client.py
+      crewai_client.py         # Real CrewAI Agent/Task/Crew orchestration + retry logic
       browser_client.py        # Playwright rendering + form-filling
       semantic_matcher.py      # Embeddings + cosine similarity
       apify_client.py          # Optional LinkedIn job source
@@ -106,6 +109,8 @@ python -m playwright install chromium
 
 copy .env.example .env        # then fill in your own API keys
 ```
+
+`requirements.txt` already includes `crewai[google-genai]`, since CrewAI's native Gemini provider (the default LLM here) needs that extra to work.
 
 ### 2. Configure `backend/.env`
 
