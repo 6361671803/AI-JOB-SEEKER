@@ -75,11 +75,11 @@ backend/
     services/                  # Reusable, LLM-agnostic logic
       llm_client.py            # Every prompt/schema — calls into crewai_client.py
       crewai_client.py         # Real CrewAI Agent/Task/Crew orchestration + retry logic
-      browser_client.py        # Playwright rendering + form-filling
+      browser_client.py        # Playwright rendering + application-page screenshotting
       semantic_matcher.py      # Embeddings + cosine similarity
       apify_client.py          # Optional LinkedIn job source
       skill_matcher.py         # Deterministic skill matching
-      ats_detector.py, form_filler.py, date_utils.py, job_filter.py, ...
+      ats_detector.py, date_utils.py, job_filter.py, ...
     db/models.py                # Candidate, Company, Job ORM models
     models/schemas.py           # Every Pydantic API schema
 frontend/
