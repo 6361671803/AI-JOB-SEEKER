@@ -30,7 +30,7 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 3. **Company Discovery** — finds real companies and their official career pages via live web search (Tavily), with a deterministic filter that rejects place names (e.g. a city mis-extracted as a "company") and government/administrative bodies.
 4. **Job Discovery** — renders each company's career page with a real headless browser (Playwright), extracts individual job listings (never navigation/category links), follows through to the real ATS board when the landing page is just a search widget, then visits each job's own detail page for its actual requirements. Optionally augmented with LinkedIn listings via Apify.
 5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison).
-6. **Application Preparation** — auto-fills recognized text/dropdown form fields via Playwright, detecting and safely stopping (touching zero fields) on CAPTCHA, OTP, or login walls. Fields like work authorization and cover letters are never auto-filled — they always require the user's own input. It does **not** reliably attach the resume file to a real application form (most sites use a custom upload widget, not a plain file input) and it never logs in or submits on the user's behalf — see Honest Limitations below.
+6. **Application Preparation** — opens the job's official application page with a real headless browser (Playwright) and captures a screenshot so the user has a visual record of it before applying. It does not inspect, fill in, or submit any form field — the application itself is always completed by the user on the official site, and it never logs in on the user's behalf — see Honest Limitations below.
 7. **Two-Gate Human Approval** — enforced at the backend state-machine level, not just the UI: Approval #1 gates whether any automation runs at all; Approval #2 (an explicit confirmation) gates whether a job is ever marked submitted.
 
 Every job's status (discovery through submission/failure) is persisted in the database throughout, since both approval gates are enforced against it — there is no dedicated tracker page in the UI.
@@ -139,8 +139,8 @@ This starts the backend (`uvicorn app.main:app --port 8000`) and frontend (`vite
 - Job Discovery runs sequentially per company (a parallelized version was tried and reverted after causing a real hang) — a full run against ~25 companies takes roughly 5–12 minutes.
 - Semantic matching requires a Gemini API key specifically; it's unavailable if only a non-Gemini provider is configured, with a documented, non-silent fallback to a 5-factor score.
 - Single-user, local application — no authentication/multi-user support, no production deployment configuration.
-- Does not upload/attach the resume file into a real, external application form — most application pages use a custom JS upload widget rather than a plain file input, so this was never verified working end-to-end.
-- Does not log in and cannot submit an application on the user's behalf — by design. Any application that requires signing in must be completed manually.
+- Does not inspect, fill in, or upload/attach anything into a real application form — Application Preparation only opens the official page and screenshots it. Every field, including the resume file itself, is entered by the user.
+- Does not log in and cannot submit an application on the user's behalf — by design. Any application must be completed manually by the user.
 
 ## License
 
