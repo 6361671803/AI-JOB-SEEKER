@@ -1,13 +1,13 @@
-"""Application Preparation Agent (with the Browser Automation Agent's logic folded in).
+"""Application Preparation Agent.
 
-Responsibility: for a single SELECTED job, open its official application page, detect which ATS
-hosts it, and — if the platform is reliably automatable and no CAPTCHA/login blocker is present —
-fill in what can be confidently resolved from the resume. Takes a screenshot as proof of what was
-filled, then closes the browser.
+Responsibility: for a single SELECTED job, open its official application page in a real browser,
+detect which ATS hosts it (informational only), and take a screenshot so the user has a visual
+record of the page before they apply. It never inspects or fills in any form fields.
 
-HARD REQUIREMENT: this agent never submits anything. There is no code path anywhere in this
-agent or in browser_client.prepare_application_page that clicks a submit button. It always stops
-and hands the user the official URL plus a field-by-field summary for their own review.
+HARD REQUIREMENT: this agent never submits anything, and never touches a form field. There is no
+code path anywhere in this agent or in browser_client.prepare_application_page that fills a field
+or clicks a submit button. It always stops and hands the user the official URL for them to
+complete and submit the application themselves.
 """
 import json
 from datetime import datetime, timezone
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Candidate, Job
-from app.services.ats_detector import NOT_RELIABLY_AUTOMATABLE, detect_platform
+from app.services.ats_detector import detect_platform
 from app.services.browser_client import BrowserFetchError, prepare_application_page
 
 
@@ -26,8 +26,6 @@ class ApplicationPreparationAgent:
         if job.status not in ("SELECTED", "WAITING_FOR_REVIEW", "FAILED"):
             raise ValueError("Job must be selected before its application can be prepared.")
 
-        profile = json.loads(candidate.profile_json)
-        preferences = json.loads(candidate.preferences_json) if candidate.preferences_json else {}
         target_url = job.application_url or job.job_url
 
         if not target_url:
@@ -38,56 +36,22 @@ class ApplicationPreparationAgent:
         db.add(job)
         db.commit()
 
-        platform = detect_platform(target_url)
-        job.application_platform = platform
-
-        if platform in NOT_RELIABLY_AUTOMATABLE:
-            self._stop_for_review(
-                db, job,
-                message=(
-                    f"{platform.title()} application forms are typically multi-step and often "
-                    "require account creation, so this agent doesn't attempt to auto-fill them. "
-                    "Please open the official link below and apply directly."
-                ),
-                fields=[],
-            )
-            return job
+        job.application_platform = detect_platform(target_url)
 
         screenshot_dir = Path(settings.screenshot_storage_dir)
         screenshot_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = str(screenshot_dir / f"{job.id}.png")
 
         try:
-            result = prepare_application_page(
-                target_url, profile, preferences, candidate.resume_storage_path, screenshot_path
-            )
+            prepare_application_page(target_url, screenshot_path)
         except BrowserFetchError as e:
             self._fail(db, job, f"Could not open the application page: {e}")
             return job
 
         job.screenshot_path = screenshot_path if Path(screenshot_path).exists() else None
 
-        if result["blockers"]:
-            self._stop_for_review(
-                db, job,
-                message=(
-                    "Manual action required: " + "; ".join(result["blockers"]) + ". The agent stopped "
-                    "without filling any fields — please complete this step yourself using the "
-                    "official link below."
-                ),
-                fields=[],
-            )
-            return job
-
-        fields = result["fields"]
-        completed = sum(1 for f in fields if f["filled"])
-        needs_review = len(fields) - completed
-        message = (
-            f"Filled {completed} of {len(fields)} detected fields from your resume. "
-            f"{needs_review} field(s) need your review before you submit."
-        ) if fields else "No fillable form fields were detected on this page."
-
-        self._stop_for_review(db, job, message=message, fields=fields)
+        message = "Official application page opened below. Please review it and complete the application yourself using the link."
+        self._stop_for_review(db, job, message=message, fields=[])
         return job
 
     @staticmethod
