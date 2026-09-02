@@ -1,39 +1,32 @@
 # Agentic Job Finder and Application Assistant
 ##demo video on youtube:https://youtu.be/2jT2LQv41R8
-A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, matching them against a candidate's resume with an explainable score, and preparing — **never auto-submitting** — job applications on official company career pages.
+A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, and matching them against a candidate's resume with an explainable score. That match screen — score, job description, job details, and skill match — is the end of the pipeline; the project does not select jobs, prepare applications, or touch a real application form in any way.
 
-Built as a full-stack application: a Python/FastAPI backend orchestrating six single-responsibility agents through **CrewAI** (real `Agent`/`Task`/`Crew` objects, not a hand-rolled prompt wrapper), and a React single-page frontend guiding the user through the workflow end-to-end.
+Built as a full-stack application: a Python/FastAPI backend orchestrating five single-responsibility agents through **CrewAI** (real `Agent`/`Task`/`Crew` objects, not a hand-rolled prompt wrapper), and a React single-page frontend guiding the user through the workflow end-to-end.
 
 ## Why This Exists
 
-Manually checking dozens of individual company career pages, judging how well each opening matches your own background, and retyping the same information into every application form does not scale. Most company career sites are JavaScript-rendered SPAs, so a plain HTTP request cannot even read the listings. This project discovers directly from primary sources (the employer's own career page, rendered with a real browser), explains every point of its match score, and keeps a human in control of the one action that genuinely matters — choosing to submit.
+Manually checking dozens of individual company career pages and judging how well each opening matches your own background does not scale. Most company career sites are JavaScript-rendered SPAs, so a plain HTTP request cannot even read the listings. This project discovers directly from primary sources (the employer's own career page, rendered with a real browser) and explains every point of its match score, rather than handing back an opaque percentage.
 
 ## Core Design Principle
 
-**The system never invents information and never submits anything on the user's behalf.**
+**The system never invents information.**
 
 - Every job listing traces back to a link that was actually found on a real, rendered page.
 - Every skill match is a literal string comparison against the resume's own extracted text — no LLM guessing.
-- An explicit human approval is required before any application preparation begins.
-- No code path anywhere in the application clicks a final "Submit" button, and the app does not track whether or when a job is actually submitted — that happens entirely on the official site, by the user.
+- The pipeline stops at showing the candidate their ranked, explained matches. It does not select jobs, does not open or interact with any real application page, and does not touch a form field anywhere.
 
 ## How It Works
 
 ```
 Resume Upload → Preferences → Company Discovery → Job Discovery → Matching & Ranking
-      → User Selects Jobs → ★ Approval → Application Preparation
-      → Screenshot + Official Link Shown → User Applies Themselves
 ```
 
 1. **Resume Upload & Parsing** — extracts structured data (skills, education, experience, projects) from a PDF/DOCX resume without inventing anything not in the source document.
 2. **Preferences** — collects work-mode, city, and experience preferences, or infers likely target roles from the resume via LLM.
 3. **Company Discovery** — finds real companies and their official career pages via live web search (Tavily), with a deterministic filter that rejects place names (e.g. a city mis-extracted as a "company") and government/administrative bodies.
 4. **Job Discovery** — renders each company's career page with a real headless browser (Playwright), extracts individual job listings (never navigation/category links), follows through to the real ATS board when the landing page is just a search widget, then visits each job's own detail page for its actual requirements. Optionally augmented with LinkedIn listings via Apify.
-5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison).
-6. **Application Preparation** — opens the job's official application page with a real headless browser (Playwright) and captures a screenshot so the user has a visual record of it before applying. It does not inspect, fill in, or submit any form field — the application itself is always completed by the user on the official site, and it never logs in on the user's behalf — see Honest Limitations below.
-7. **Human Approval Gate** — enforced at the backend state-machine level, not just the UI: the user must explicitly approve before any application preparation runs at all.
-
-Every job's status is persisted in the database throughout, since the approval gate is enforced against it — there is no dedicated tracker page in the UI, and the app does not track whether or when a job was actually submitted.
+5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison). The results screen — match score, job description, job details, and skill match — is the final thing the project does.
 
 ## Technology Stack
 
@@ -51,7 +44,7 @@ Every job's status is persisted in the database throughout, since the approval g
 
 ## Key Engineering Decisions
 
-- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the approval gate below stays fully deterministic.
+- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear pipeline. No autonomous planning, no dynamic tool-calling loop.
 - **JSON-schema-constrained LLM extraction** — every LLM call forces strict, schema-valid JSON output, never free-form prose.
 - **Deterministic anti-hallucination backstops layered under every LLM call** — whole-word skill matching, URL grounding (a link must literally appear on the rendered page), date grounding (a date must be a verbatim substring of the page text), a hard-coded third-party job-board domain blocklist, and a place-name filter.
 - **Two-stage job extraction** — listing-page fields (title/location/link) are extracted separately from detail-page fields (requirements/skills), since asking one call to guess fields that aren't actually on that page caused fabricated data during development.
@@ -71,11 +64,10 @@ backend/
       company_discovery_agent.py
       job_discovery_agent.py
       matching_agent.py
-      application_preparation_agent.py
     services/                  # Reusable, LLM-agnostic logic
       llm_client.py            # Every prompt/schema — calls into crewai_client.py
       crewai_client.py         # Real CrewAI Agent/Task/Crew orchestration + retry logic
-      browser_client.py        # Playwright rendering + application-page screenshotting
+      browser_client.py        # Playwright page rendering for discovery
       semantic_matcher.py      # Embeddings + cosine similarity
       apify_client.py          # Optional LinkedIn job source
       skill_matcher.py         # Deterministic skill matching
@@ -139,9 +131,7 @@ This starts the backend (`uvicorn app.main:app --port 8000`) and frontend (`vite
 - Job Discovery runs sequentially per company (a parallelized version was tried and reverted after causing a real hang) — a full run against ~25 companies takes roughly 5–12 minutes.
 - Semantic matching requires a Gemini API key specifically; it's unavailable if only a non-Gemini provider is configured, with a documented, non-silent fallback to a 5-factor score.
 - Single-user, local application — no authentication/multi-user support, no production deployment configuration.
-- Does not inspect, fill in, or upload/attach anything into a real application form — Application Preparation only opens the official page and screenshots it. Every field, including the resume file itself, is entered by the user.
-- Does not log in and cannot submit an application on the user's behalf — by design. Any application must be completed manually by the user.
-- Does not track whether or when an application was actually submitted — the earlier "mark as submitted" confirmation step was removed entirely; the app stops at showing the screenshot and the official link.
+- Does not select jobs, prepare applications, open any real application page, or interact with a form field in any way — the project intentionally ends at the matched-jobs results screen. Applying for a job is entirely up to the user, outside this app, using the job/application links shown on each result.
 
 ## License
 
