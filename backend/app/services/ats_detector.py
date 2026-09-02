@@ -1,40 +1,23 @@
-"""Detects which Applicant Tracking System (ATS) hosts a job application page.
-
-Some platforms (Workday, Taleo) are multi-step wizards that often require account creation and
-are known to be brittle/unreliable to automate blindly — for those we deliberately stop and hand
-the user the official URL rather than risk a broken, misleading auto-fill attempt.
+"""Finds a link to a known Applicant Tracking System (ATS) on a rendered career page — used as a
+second chance to locate real job listings when a company's careers page is just a search widget.
 """
 import re
 from urllib.parse import urlparse
 
-_DOMAIN_TO_PLATFORM = {
-    "greenhouse.io": "greenhouse",
-    "lever.co": "lever",
-    "smartrecruiters.com": "smartrecruiters",
-    "myworkdayjobs.com": "workday",
-    "myworkday.com": "workday",
-    "taleo.net": "taleo",
-}
-
-# Platforms known to be multi-step/login-heavy/inconsistent enough that a generic form-filler
-# can't reliably automate them without a real risk of silently getting fields wrong.
-NOT_RELIABLY_AUTOMATABLE = {"workday", "taleo"}
-
-KNOWN_ATS_DOMAINS = tuple(_DOMAIN_TO_PLATFORM.keys())
+KNOWN_ATS_DOMAINS = (
+    "greenhouse.io",
+    "lever.co",
+    "smartrecruiters.com",
+    "myworkdayjobs.com",
+    "myworkday.com",
+    "taleo.net",
+)
 
 _LISTING_LINK_TEXT_RE = re.compile(
     r"explore open roles|open roles|open positions|current openings|browse jobs|"
     r"search jobs|view all jobs|see all jobs|all open positions|job search|job listings",
     re.IGNORECASE,
 )
-
-
-def detect_platform(url: str) -> str:
-    host = urlparse(url).netloc.lower()
-    for domain, platform in _DOMAIN_TO_PLATFORM.items():
-        if domain in host:
-            return platform
-    return "custom"
 
 
 def find_ats_link(links: list[dict], exclude_url: str | None = None) -> str | None:

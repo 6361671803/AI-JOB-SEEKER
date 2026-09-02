@@ -73,8 +73,9 @@ class Job(Base):
     job_url: Mapped[str | None] = mapped_column(String, nullable=True)
     application_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Status: DISCOVERED, MATCHED, SELECTED, PREPARING, WAITING_FOR_REVIEW, FAILED. SUBMITTED is
-    # historical only — no code path sets it anymore since the mark-submitted step was removed.
+    # Status: DISCOVERED (default) or MATCHED (set once the Matching Agent has scored it). Other
+    # values (SELECTED, PREPARING, WAITING_FOR_REVIEW, FAILED, SUBMITTED) are historical only — no
+    # code path sets them anymore since job selection and application preparation were removed.
     status: Mapped[str] = mapped_column(String, default="DISCOVERED")
 
     # Resume/Job Matching Agent output (Phase 6) — null until matched.
@@ -96,20 +97,5 @@ class Job(Base):
     experience_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     role_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     why_this_matches: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Application Preparation Agent output (Phase 9) — null until prepared.
-    application_platform: Mapped[str | None] = mapped_column(String, nullable=True)
-    prepared_fields_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prepared_fields_completed: Mapped[int | None] = mapped_column(nullable=True)
-    prepared_fields_needs_review: Mapped[int | None] = mapped_column(nullable=True)
-    preparation_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    screenshot_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Final review / submission tracking (Phase 10) — user-provided answers are for the
-    # candidate's own checklist only; this app never re-submits anything itself.
-    user_provided_fields_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -1,16 +1,11 @@
 import json
 import logging
-from collections import Counter
-from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.agents.application_preparation_agent import ApplicationPreparationAgent
 from app.agents.company_discovery_agent import CompanyDiscoveryAgent
 from app.agents.job_discovery_agent import JobDiscoveryAgent
 from app.agents.matching_agent import MatchingAgent
@@ -20,16 +15,11 @@ from app.config import settings
 from app.db.database import get_db, init_db
 from app.db.models import Candidate, Company, Job
 from app.models.schemas import (
-    ApplicationPreparation,
-    ApprovalResponse,
     CandidateResponse,
     CompanyDiscoveryResponse,
     JobDiscoveryResponse,
     PreferenceInput,
     PreferenceResponse,
-    ReviewFieldUpdateInput,
-    SelectJobsInput,
-    TrackerResponse,
 )
 from app.services.job_filter import ALLOWED_WINDOW_DAYS, DEFAULT_WINDOW_DAYS, filter_jobs_by_window
 from app.services.llm_client import LLMNotConfiguredError, LLMRequestError
@@ -337,192 +327,3 @@ def match_jobs(
         raise HTTPException(status_code=503, detail=str(e))
 
     return _job_discovery_response(candidate, jobs, window_days, [])
-
-
-@app.post("/api/candidate/{candidate_id}/select-jobs", response_model=JobDiscoveryResponse)
-def select_jobs(
-    candidate_id: str,
-    payload: SelectJobsInput,
-    window_days: int = Query(DEFAULT_WINDOW_DAYS),
-    db: Session = Depends(get_db),
-) -> JobDiscoveryResponse:
-    """Persists the user's job selection. The agent never starts preparing applications for
-    jobs that aren't in job_ids — selection is purely an explicit user action."""
-    _validate_window_days(window_days)
-    candidate = db.get(Candidate, candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-
-    jobs = db.query(Job).filter(Job.candidate_id == candidate_id).all()
-    valid_ids = {j.id for j in jobs}
-    unknown_ids = set(payload.job_ids) - valid_ids
-    if unknown_ids:
-        raise HTTPException(status_code=400, detail=f"Unknown job id(s): {sorted(unknown_ids)}")
-
-    selected_ids = set(payload.job_ids)
-    for job in jobs:
-        if job.id in selected_ids:
-            job.status = "SELECTED"
-        elif job.status == "SELECTED":
-            # Previously selected but now unchecked — revert, don't leave it stuck as SELECTED.
-            job.status = "MATCHED" if job.overall_score is not None else "DISCOVERED"
-        db.add(job)
-
-    candidate.state = "USER_SELECTS_JOBS"
-    db.add(candidate)
-    db.commit()
-    for j in jobs:
-        db.refresh(j)
-
-    return _job_discovery_response(candidate, jobs, window_days, [])
-
-
-@app.post("/api/candidate/{candidate_id}/approve-application-preparation", response_model=ApprovalResponse)
-def approve_application_preparation(candidate_id: str, db: Session = Depends(get_db)) -> ApprovalResponse:
-    """The explicit human-approval gate before any application preparation can begin.
-    Never skipped — the orchestrator will not move past USER_SELECTS_JOBS without this call."""
-    candidate = db.get(Candidate, candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-
-    selected_count = db.query(Job).filter(Job.candidate_id == candidate_id, Job.status == "SELECTED").count()
-    if selected_count == 0:
-        raise HTTPException(status_code=400, detail="No jobs are selected. Select at least one job first.")
-
-    candidate.state = "USER_APPROVES_APPLICATION_PREPARATION"
-    db.add(candidate)
-    db.commit()
-
-    return ApprovalResponse(candidate_id=candidate.id, state=candidate.state, selected_count=selected_count)
-
-
-def _get_job_or_404(db: Session, candidate_id: str, job_id: str) -> Job:
-    job = db.query(Job).filter(Job.candidate_id == candidate_id, Job.id == job_id).first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found for this candidate.")
-    return job
-
-
-def _application_preparation_response(job: Job) -> ApplicationPreparation:
-    fields = json.loads(job.prepared_fields_json) if job.prepared_fields_json else []
-    user_provided = json.loads(job.user_provided_fields_json) if job.user_provided_fields_json else {}
-
-    # Fields the candidate has since filled in themselves (for their own checklist — this app
-    # never re-submits anything, so these values are display-only, not re-sent anywhere).
-    for f in fields:
-        if f["label"] in user_provided and user_provided[f["label"]]:
-            f["value"] = user_provided[f["label"]]
-            f["source"] = "user_provided"
-            f["filled"] = True
-
-    completed = sum(1 for f in fields if f["filled"])
-    return ApplicationPreparation(
-        job_id=job.id,
-        company_name=job.company_name,
-        title=job.title,
-        application_url=job.application_url or job.job_url,
-        platform=job.application_platform or "unknown",
-        status=job.status,
-        message=job.preparation_message or "",
-        fields=fields,
-        fields_completed=completed,
-        fields_needs_review=len(fields) - completed,
-        screenshot_available=bool(job.screenshot_path and Path(job.screenshot_path).exists()),
-    )
-
-
-@app.post(
-    "/api/candidate/{candidate_id}/jobs/{job_id}/prepare-application",
-    response_model=ApplicationPreparation,
-)
-def prepare_application(candidate_id: str, job_id: str, db: Session = Depends(get_db)) -> ApplicationPreparation:
-    candidate = db.get(Candidate, candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-    if candidate.state not in ("USER_APPROVES_APPLICATION_PREPARATION", "APPLICATIONS_PREPARED"):
-        raise HTTPException(
-            status_code=400,
-            detail="Application preparation must be explicitly approved first "
-            "(POST .../approve-application-preparation).",
-        )
-
-    job = _get_job_or_404(db, candidate_id, job_id)
-
-    agent = ApplicationPreparationAgent()
-    try:
-        job = agent.prepare(db, candidate, job)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    candidate.state = "APPLICATIONS_PREPARED"
-    db.add(candidate)
-    db.commit()
-
-    return _application_preparation_response(job)
-
-
-@app.post(
-    "/api/candidate/{candidate_id}/jobs/{job_id}/review-fields",
-    response_model=ApplicationPreparation,
-)
-def update_review_fields(
-    candidate_id: str, job_id: str, payload: ReviewFieldUpdateInput, db: Session = Depends(get_db)
-) -> ApplicationPreparation:
-    """Lets the candidate fill in answers for fields the agent couldn't (work authorization,
-    cover letter, unrecognized questions) as their own checklist before they go apply themselves.
-    Purely informational — nothing here is sent anywhere."""
-    job = _get_job_or_404(db, candidate_id, job_id)
-    if job.status not in ("WAITING_FOR_REVIEW", "SUBMITTED"):
-        raise HTTPException(status_code=400, detail="This job hasn't been prepared yet.")
-
-    existing = json.loads(job.user_provided_fields_json) if job.user_provided_fields_json else {}
-    existing.update({k: v for k, v in payload.fields.items() if v is not None})
-    job.user_provided_fields_json = json.dumps(existing)
-    job.reviewed_at = datetime.now(timezone.utc)
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    return _application_preparation_response(job)
-
-
-@app.get("/api/candidate/{candidate_id}/jobs/{job_id}/screenshot")
-def get_application_screenshot(candidate_id: str, job_id: str, db: Session = Depends(get_db)) -> FileResponse:
-    job = _get_job_or_404(db, candidate_id, job_id)
-    if not job.screenshot_path or not Path(job.screenshot_path).exists():
-        raise HTTPException(status_code=404, detail="No screenshot available for this job.")
-    return FileResponse(job.screenshot_path, media_type="image/png")
-
-
-@app.get("/api/candidate/{candidate_id}/tracker", response_model=TrackerResponse)
-def get_tracker(candidate_id: str, db: Session = Depends(get_db)) -> TrackerResponse:
-    """Every job this candidate's search has ever touched, with its current status — the single
-    place to see the full history from discovery through submission."""
-    candidate = db.get(Candidate, candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-
-    jobs = db.query(Job).filter(Job.candidate_id == candidate_id).order_by(Job.created_at.desc()).all()
-
-    entries = [
-        {
-            "job_id": j.id,
-            "company_name": j.company_name,
-            "title": j.title,
-            "job_id_external": j.job_id_external,
-            "match_score": j.overall_score,
-            "date_found": j.created_at.isoformat(),
-            "date_posted": j.date_posted,
-            "application_date": j.submitted_at.isoformat() if j.submitted_at else None,
-            "status": j.status,
-            "job_url": j.job_url,
-            "application_url": j.application_url,
-        }
-        for j in jobs
-    ]
-
-    return TrackerResponse(
-        candidate_id=candidate_id,
-        entries=entries,
-        status_counts=dict(Counter(j.status for j in jobs)),
-    )

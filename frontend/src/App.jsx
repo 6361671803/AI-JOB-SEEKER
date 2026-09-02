@@ -11,8 +11,6 @@ import CompanyDiscovery from "./components/CompanyDiscovery";
 import CompanyResults from "./components/CompanyResults";
 import JobDiscovery from "./components/JobDiscovery";
 import JobResults from "./components/JobResults";
-import ApplicationApproval from "./components/ApplicationApproval";
-import ApplicationPreparation from "./components/ApplicationPreparation";
 import "./App.css";
 
 const VIEW = {
@@ -25,8 +23,6 @@ const VIEW = {
   COMPANIES_FOUND: "COMPANIES_FOUND",
   DISCOVER_JOBS: "DISCOVER_JOBS",
   JOBS_FOUND: "JOBS_FOUND",
-  APPLICATION_APPROVAL: "APPLICATION_APPROVAL",
-  APPLICATION_PREPARATION: "APPLICATION_PREPARATION",
 };
 
 // Which top-nav item should highlight as active for a given view.
@@ -40,8 +36,6 @@ const NAV_KEY_FOR_VIEW = {
   [VIEW.COMPANIES_FOUND]: "DISCOVER",
   [VIEW.DISCOVER_JOBS]: "DISCOVER",
   [VIEW.JOBS_FOUND]: "DISCOVER",
-  [VIEW.APPLICATION_APPROVAL]: "APPLICATIONS",
-  [VIEW.APPLICATION_PREPARATION]: "APPLICATIONS",
 };
 
 function AppContent() {
@@ -50,7 +44,6 @@ function AppContent() {
   const [preferences, setPreferences] = useState(null);
   const [companyResult, setCompanyResult] = useState(null);
   const [jobResult, setJobResult] = useState(null);
-  const [selectedJobs, setSelectedJobs] = useState([]);
 
   const handleResumeAnalyzed = (result) => {
     setCandidate(result);
@@ -62,7 +55,6 @@ function AppContent() {
     setPreferences(null);
     setCompanyResult(null);
     setJobResult(null);
-    setSelectedJobs([]);
     setView(VIEW.UPLOAD);
   };
 
@@ -79,11 +71,6 @@ function AppContent() {
   const handleJobsDiscovered = (result) => {
     setJobResult(result);
     setView(VIEW.JOBS_FOUND);
-  };
-
-  const handleSelectionApproved = (jobs) => {
-    setSelectedJobs(jobs);
-    setView(VIEW.APPLICATION_APPROVAL);
   };
 
   const handleNavigate = (navKey) => {
@@ -182,21 +169,7 @@ function AppContent() {
             companiesDiscoveredCount={companyResult ? companyResult.companies.length : 0}
             onRediscover={() => setView(VIEW.DISCOVER_JOBS)}
             onResultChange={setJobResult}
-            onSelectionApproved={handleSelectionApproved}
           />
-        )}
-
-        {view === VIEW.APPLICATION_APPROVAL && candidate && (
-          <ApplicationApproval
-            candidateId={candidate.id}
-            selectedJobs={selectedJobs}
-            onBack={() => setView(VIEW.JOBS_FOUND)}
-            onApproved={() => setView(VIEW.APPLICATION_PREPARATION)}
-          />
-        )}
-
-        {view === VIEW.APPLICATION_PREPARATION && candidate && (
-          <ApplicationPreparation candidateId={candidate.id} selectedJobs={selectedJobs} />
         )}
       </main>
     </div>

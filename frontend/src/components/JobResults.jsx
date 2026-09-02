@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { getJobs, matchJobs, selectJobs } from "../api/client";
+import { useMemo, useState } from "react";
+import { getJobs, matchJobs } from "../api/client";
 import { useToast } from "../context/ToastContext";
 import MatchScoreBadge from "./shared/MatchScoreBadge";
 import JobFilters from "./shared/JobFilters";
@@ -26,22 +26,13 @@ function skillList(label, skills, symbol, className) {
   );
 }
 
-function JobCard({ j, rank, selectable, checked, onToggle, onViewDetails, onViewDescription }) {
+function JobCard({ j, rank, onViewDetails, onViewDescription }) {
   const { match } = j;
 
   return (
-    <div className={`job-card ${checked ? "job-card-selected" : ""}`}>
+    <div className="job-card">
       <div className="job-card-header">
         <h3>
-          {selectable && (
-            <input
-              type="checkbox"
-              className="job-select-checkbox"
-              checked={checked}
-              onChange={() => onToggle(j.id)}
-              aria-label={`Select ${j.title} for application`}
-            />
-          )}
           {rank != null && <span className="rank-badge">#{rank}</span>} {j.title}
         </h3>
         {match && <MatchScoreBadge score={match.overall_score} />}
@@ -89,27 +80,18 @@ function JobCard({ j, rank, selectable, checked, onToggle, onViewDetails, onView
 }
 
 export default function JobResults({
-  candidateId, result, companiesDiscoveredCount, onRediscover, onResultChange, onSelectionApproved,
+  candidateId, result, companiesDiscoveredCount, onRediscover, onResultChange,
 }) {
   const { recent_jobs, unknown_date_jobs, older_jobs_count, window_days, companies_skipped } = result;
   const [showUnknown, setShowUnknown] = useState(false);
   const [refiltering, setRefiltering] = useState(false);
   const [matching, setMatching] = useState(false);
-  const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedIds, setSelectedIds] = useState(new Set());
   const [detailsJob, setDetailsJob] = useState(null);
   const [descriptionJob, setDescriptionJob] = useState(null);
   const [sortKey, setSortKey] = useState("best_match");
   const [filters, setFilters] = useState({ locations: [], workModes: [], minScore: 0 });
   const notify = useToast();
-
-  // Re-sync checkbox state from the server's truth whenever the result set changes
-  // (e.g. after re-matching, which resets any prior selection server-side).
-  useEffect(() => {
-    setSelectedIds(new Set([...recent_jobs, ...unknown_date_jobs].filter((j) => j.status === "SELECTED").map((j) => j.id)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result]);
 
   const allJobs = [...recent_jobs, ...unknown_date_jobs];
   const alreadyMatched = allJobs.some((j) => j.match !== null);
@@ -125,14 +107,6 @@ export default function JobResults({
     });
     return [...list].sort(SORTERS[sortKey]);
   }, [recent_jobs, filters, sortKey]);
-
-  const toggleSelected = (id) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
 
   const handleWindowChange = async (newWindow) => {
     setRefiltering(true);
@@ -155,22 +129,6 @@ export default function JobResults({
       setError(err.message);
     } finally {
       setMatching(false);
-    }
-  };
-
-  const handleContinueToApplications = async () => {
-    setSelecting(true);
-    setError(null);
-    try {
-      const updated = await selectJobs(candidateId, [...selectedIds], window_days);
-      onResultChange(updated);
-      const selectedJobs = [...updated.recent_jobs, ...updated.unknown_date_jobs]
-        .filter((j) => j.status === "SELECTED");
-      onSelectionApproved(selectedJobs);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSelecting(false);
     }
   };
 
@@ -270,13 +228,6 @@ export default function JobResults({
               </label>
             </div>
 
-            {alreadyMatched && (
-              <p className="hint" style={{ marginBottom: 12 }}>
-                Check the jobs you'd like to apply to — the agent will not prepare or submit
-                applications for anything you don't select.
-              </p>
-            )}
-
             {matching ? (
               <SkeletonCards count={4} />
             ) : (
@@ -286,9 +237,6 @@ export default function JobResults({
                     j={j}
                     rank={alreadyMatched ? i + 1 : null}
                     key={j.id}
-                    selectable={alreadyMatched}
-                    checked={selectedIds.has(j.id)}
-                    onToggle={toggleSelected}
                     onViewDetails={setDetailsJob}
                     onViewDescription={setDescriptionJob}
                   />
@@ -308,9 +256,6 @@ export default function JobResults({
                       <JobCard
                         j={j}
                         key={j.id}
-                        selectable={alreadyMatched}
-                        checked={selectedIds.has(j.id)}
-                        onToggle={toggleSelected}
                         onViewDetails={setDetailsJob}
                         onViewDescription={setDescriptionJob}
                       />
@@ -335,20 +280,6 @@ export default function JobResults({
           Re-run Job Discovery
         </button>
       </div>
-
-      {alreadyMatched && selectedIds.size > 0 && (
-        <div className="selection-toolbar">
-          <strong>{selectedIds.size} job{selectedIds.size === 1 ? "" : "s"} selected</strong>
-          <div className="button-row" style={{ margin: 0 }}>
-            <button className="btn btn-secondary" onClick={() => setSelectedIds(new Set())}>
-              Clear Selection
-            </button>
-            <button className="btn btn-primary" onClick={handleContinueToApplications} disabled={selecting}>
-              {selecting ? "Saving..." : "Prepare Applications →"}
-            </button>
-          </div>
-        </div>
-      )}
 
       {detailsJob && <MatchDetailsModal job={detailsJob} onClose={() => setDetailsJob(null)} />}
       {descriptionJob && <JobDescriptionModal job={descriptionJob} onClose={() => setDescriptionJob(null)} />}

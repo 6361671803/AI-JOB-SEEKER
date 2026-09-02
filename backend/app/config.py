@@ -28,7 +28,6 @@ class Settings(BaseSettings):
 
     database_url: str = f"sqlite:///{BACKEND_DIR / 'storage' / 'data' / 'app.db'}"
     resume_storage_dir: str = str(BACKEND_DIR / "storage" / "resumes")
-    screenshot_storage_dir: str = str(BACKEND_DIR / "storage" / "screenshots")
 
     frontend_origin: str = "http://localhost:5173"
 
