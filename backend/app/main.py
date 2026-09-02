@@ -25,7 +25,6 @@ from app.models.schemas import (
     CandidateResponse,
     CompanyDiscoveryResponse,
     JobDiscoveryResponse,
-    MarkSubmittedInput,
     PreferenceInput,
     PreferenceResponse,
     ReviewFieldUpdateInput,
@@ -473,46 +472,13 @@ def update_review_fields(
     cover letter, unrecognized questions) as their own checklist before they go apply themselves.
     Purely informational — nothing here is sent anywhere."""
     job = _get_job_or_404(db, candidate_id, job_id)
-    if job.status not in ("WAITING_FOR_REVIEW", "SUBMITTED"):
+    if job.status != "WAITING_FOR_REVIEW":
         raise HTTPException(status_code=400, detail="This job hasn't been prepared yet.")
 
     existing = json.loads(job.user_provided_fields_json) if job.user_provided_fields_json else {}
     existing.update({k: v for k, v in payload.fields.items() if v is not None})
     job.user_provided_fields_json = json.dumps(existing)
     job.reviewed_at = datetime.now(timezone.utc)
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    return _application_preparation_response(job)
-
-
-@app.post(
-    "/api/candidate/{candidate_id}/jobs/{job_id}/mark-submitted",
-    response_model=ApplicationPreparation,
-)
-def mark_submitted(
-    candidate_id: str, job_id: str, payload: MarkSubmittedInput, db: Session = Depends(get_db)
-) -> ApplicationPreparation:
-    """Records that the candidate reviewed and submitted this application themselves on the
-    official site. This endpoint never submits anything on the candidate's behalf — it only
-    requires an explicit confirmation flag before updating the tracker."""
-    if not payload.confirmed:
-        raise HTTPException(
-            status_code=400,
-            detail="Explicit confirmation is required (confirmed=true) before marking an "
-            "application as submitted.",
-        )
-
-    job = _get_job_or_404(db, candidate_id, job_id)
-    if job.status != "WAITING_FOR_REVIEW":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job must be prepared and awaiting review first (current status: {job.status}).",
-        )
-
-    job.status = "SUBMITTED"
-    job.submitted_at = datetime.now(timezone.utc)
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -531,7 +497,8 @@ def get_application_screenshot(candidate_id: str, job_id: str, db: Session = Dep
 @app.get("/api/candidate/{candidate_id}/tracker", response_model=TrackerResponse)
 def get_tracker(candidate_id: str, db: Session = Depends(get_db)) -> TrackerResponse:
     """Every job this candidate's search has ever touched, with its current status — the single
-    place to see the full history from discovery through submission."""
+    place to see the full history from discovery through final application preparation. This app
+    never tracks whether the candidate went on to actually submit the application themselves."""
     candidate = db.get(Candidate, candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="Candidate not found.")
@@ -547,7 +514,6 @@ def get_tracker(candidate_id: str, db: Session = Depends(get_db)) -> TrackerResp
             "match_score": j.overall_score,
             "date_found": j.created_at.isoformat(),
             "date_posted": j.date_posted,
-            "application_date": j.submitted_at.isoformat() if j.submitted_at else None,
             "status": j.status,
             "job_url": j.job_url,
             "application_url": j.application_url,

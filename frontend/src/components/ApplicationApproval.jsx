@@ -54,8 +54,8 @@ export default function ApplicationApproval({ candidateId, selectedJobs, onBack,
           official application page and filling in what it can from your resume.
         </p>
         <p>
-          <strong>It will NOT submit any application without your approval.</strong> You'll review
-          every field before anything is sent — that's Approval #2, later.
+          <strong>It will never submit any application.</strong> You'll review every field
+          yourself afterward, then apply and submit on the official site on your own.
         </p>
       </div>
 

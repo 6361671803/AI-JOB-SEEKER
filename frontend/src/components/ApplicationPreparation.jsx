@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { markSubmitted, prepareApplication, screenshotUrl, updateReviewFields } from "../api/client";
-import { useToast } from "../context/ToastContext";
+import { prepareApplication, screenshotUrl, updateReviewFields } from "../api/client";
 
 function categorize(field) {
   if (field.filled && (field.source === "resume" || field.source === "resume_file")) return "resume";
@@ -34,10 +33,7 @@ function EditableField({ field, draft, onDraftChange, onSave, saving }) {
 function FinalReview({ candidateId, prep, onUpdate }) {
   const [drafts, setDrafts] = useState({});
   const [savingLabel, setSavingLabel] = useState(null);
-  const [reviewed, setReviewed] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const notify = useToast();
 
   const byCategory = { resume: [], user: [], missing: [], uncertain: [] };
   for (const f of prep.fields) byCategory[categorize(f)].push(f);
@@ -58,27 +54,9 @@ function FinalReview({ candidateId, prep, onUpdate }) {
     }
   };
 
-  const handleMarkSubmitted = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const updated = await markSubmitted(candidateId, prep.job_id);
-      onUpdate(updated);
-      notify("Application tracked as submitted.", "success");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const isSubmitted = prep.status === "SUBMITTED";
-
   return (
     <div className="prep-result">
-      <p className="prep-ready-banner">
-        {isSubmitted ? "✓ Marked as Submitted" : "Application Ready for Review"}
-      </p>
+      <p className="prep-ready-banner">Application Ready for Review</p>
       <p className="job-meta">Platform detected: {prep.platform}</p>
       <p className="job-meta">{prep.message}</p>
 
@@ -135,7 +113,7 @@ function FinalReview({ candidateId, prep, onUpdate }) {
           {byCategory.missing.length > 0 && (
             <div className="review-category">
               <h4>Missing — needs your input ({byCategory.missing.length})</h4>
-              {!isSubmitted && byCategory.missing.map((f, i) => (
+              {byCategory.missing.map((f, i) => (
                 <EditableField
                   key={i}
                   field={f}
@@ -151,7 +129,7 @@ function FinalReview({ candidateId, prep, onUpdate }) {
           {byCategory.uncertain.length > 0 && (
             <div className="review-category">
               <h4>Uncertain / unrecognized ({byCategory.uncertain.length})</h4>
-              {!isSubmitted && byCategory.uncertain.map((f, i) => (
+              {byCategory.uncertain.map((f, i) => (
                 <EditableField
                   key={i}
                   field={f}
@@ -187,28 +165,14 @@ function FinalReview({ candidateId, prep, onUpdate }) {
 
       {error && <p className="error-text">{error}</p>}
 
-      {!isSubmitted ? (
-        <div className="approval-notice">
-          <p style={{ fontWeight: 650 }}>IMPORTANT — the application has NOT been submitted.</p>
-          <label className="radio-option">
-            <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />
-            I have reviewed this application.
-          </label>
-          <p className="hint">
-            This app never submits anything for you (Approval #2). Go apply on the official page
-            above, then come back and confirm here so it's tracked correctly.
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={handleMarkSubmitted}
-            disabled={!reviewed || submitting}
-          >
-            {submitting ? "Saving..." : "I've Submitted This Application"}
-          </button>
-        </div>
-      ) : (
-        <p className="unknown">This application is tracked as submitted.</p>
-      )}
+      <div className="approval-notice">
+        <p style={{ fontWeight: 650 }}>IMPORTANT — the application has NOT been submitted.</p>
+        <p className="hint">
+          This app never submits anything for you, and does not track whether you go on to submit
+          it. Review every field above, attach your resume if it isn't already, then open the
+          official application page and submit it yourself.
+        </p>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 # Agentic Job Finder and Application Assistant
 ##demo video on youtube:https://youtu.be/2jT2LQv41R8
-A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, matching them against a candidate's resume with an explainable score, and preparing — **never auto-submitting** — job applications on official company career pages.
+A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, matching them against a candidate's resume with an explainable score, and preparing — **never auto-submitting, and never tracking submission** — job applications on official company career pages.
 
 Built as a full-stack application: a Python/FastAPI backend orchestrating six single-responsibility agents through **CrewAI** (real `Agent`/`Task`/`Crew` objects, not a hand-rolled prompt wrapper), and a React single-page frontend guiding the user through the workflow end-to-end.
 
@@ -14,15 +14,15 @@ Manually checking dozens of individual company career pages, judging how well ea
 
 - Every job listing traces back to a link that was actually found on a real, rendered page.
 - Every skill match is a literal string comparison against the resume's own extracted text — no LLM guessing.
-- Two separate, explicit human approvals are required: one before any application preparation begins, and a second, independent one before a job is ever marked as submitted.
-- No code path anywhere in the application clicks a final "Submit" button.
+- One explicit human approval is required before any application preparation begins.
+- No code path anywhere in the application clicks a final "Submit" button, and the application does not ask the candidate to confirm submission or record it anywhere — the candidate applies and submits entirely on their own, outside this app.
 
 ## How It Works
 
 ```
 Resume Upload → Preferences → Company Discovery → Job Discovery → Matching & Ranking
       → User Selects Jobs → ★ Approval #1 → Application Preparation
-      → Final Review → ★ Approval #2 → Job Marked Submitted
+      → Final Review (candidate applies and submits on the official site, on their own)
 ```
 
 1. **Resume Upload & Parsing** — extracts structured data (skills, education, experience, projects) from a PDF/DOCX resume without inventing anything not in the source document.
@@ -31,9 +31,9 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 4. **Job Discovery** — renders each company's career page with a real headless browser (Playwright), extracts individual job listings (never navigation/category links), follows through to the real ATS board when the landing page is just a search widget, then visits each job's own detail page for its actual requirements. Optionally augmented with LinkedIn listings via Apify.
 5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison).
 6. **Application Preparation** — auto-fills recognized text/dropdown form fields via Playwright, detecting and safely stopping (touching zero fields) on CAPTCHA, OTP, or login walls. Fields like work authorization and cover letters are never auto-filled — they always require the user's own input. It does **not** reliably attach the resume file to a real application form (most sites use a custom upload widget, not a plain file input) and it never logs in or submits on the user's behalf — see Honest Limitations below.
-7. **Two-Gate Human Approval** — enforced at the backend state-machine level, not just the UI: Approval #1 gates whether any automation runs at all; Approval #2 (an explicit confirmation) gates whether a job is ever marked submitted.
+7. **Human Approval Gate** — enforced at the backend state-machine level, not just the UI: Approval #1 gates whether any application-preparation automation runs at all. There is no second, submission-tracking gate: the app does not ask the candidate to confirm they submitted an application, and does not record whether they did.
 
-Every job's status (discovery through submission/failure) is persisted in the database throughout, since both approval gates are enforced against it — there is no dedicated tracker page in the UI.
+Every job's status (discovery through prepared/failed) is persisted in the database throughout, since the approval gate is enforced against it — there is no dedicated tracker page in the UI, and the app has no concept of a "submitted" status.
 
 ## Technology Stack
 
@@ -51,7 +51,7 @@ Every job's status (discovery through submission/failure) is persisted in the da
 
 ## Key Engineering Decisions
 
-- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the two approval gates below stay fully deterministic.
+- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the approval gate below stays fully deterministic.
 - **JSON-schema-constrained LLM extraction** — every LLM call forces strict, schema-valid JSON output, never free-form prose.
 - **Deterministic anti-hallucination backstops layered under every LLM call** — whole-word skill matching, URL grounding (a link must literally appear on the rendered page), date grounding (a date must be a verbatim substring of the page text), a hard-coded third-party job-board domain blocklist, and a place-name filter.
 - **Two-stage job extraction** — listing-page fields (title/location/link) are extracted separately from detail-page fields (requirements/skills), since asking one call to guess fields that aren't actually on that page caused fabricated data during development.

@@ -73,7 +73,9 @@ class Job(Base):
     job_url: Mapped[str | None] = mapped_column(String, nullable=True)
     application_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Tracker status: DISCOVERED, MATCHED, SELECTED, PREPARING, WAITING_FOR_REVIEW, SUBMITTED, FAILED.
+    # Tracker status: DISCOVERED, MATCHED, SELECTED, PREPARING, WAITING_FOR_REVIEW, FAILED.
+    # The app never tracks whether the candidate actually submitted the application — submission
+    # happens entirely outside this app, on the official site, with no confirmation step here.
     status: Mapped[str] = mapped_column(String, default="DISCOVERED")
 
     # Resume/Job Matching Agent output (Phase 6) — null until matched.
@@ -105,10 +107,10 @@ class Job(Base):
     screenshot_path: Mapped[str | None] = mapped_column(String, nullable=True)
     prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Final review / submission tracking (Phase 10) — user-provided answers are for the
-    # candidate's own checklist only; this app never re-submits anything itself.
+    # Final review (Phase 10) — user-provided answers are for the candidate's own checklist only;
+    # this app never re-submits anything itself, and never tracks whether the candidate went on to
+    # submit the application themselves.
     user_provided_fields_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
