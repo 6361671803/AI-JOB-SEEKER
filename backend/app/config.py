@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
 
     gemini_api_key: str | None = None
+    # Optional second Gemini key (e.g. a free-tier key from a different Google account), used to
+    # roughly double the effective rate-limit budget by round-robining LLM calls between the two
+    # keys. Entirely optional — job discovery works exactly as before if this is unset.
+    gemini_api_key_2: str | None = None
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
     openrouter_api_key: str | None = None

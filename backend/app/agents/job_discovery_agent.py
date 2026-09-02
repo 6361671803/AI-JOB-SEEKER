@@ -16,10 +16,11 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.models import Candidate, Company, Job
 from app.services.apify_client import fetch_apify_jobs
 from app.services.ats_detector import find_secondary_listing_link
-from app.services.browser_client import BrowserFetchError, fetch_rendered_page
+from app.services.browser_client import BrowserFetchError, fetch_rendered_page_async
 from app.services.date_utils import parse_posted_date
 from app.services.llm_client import (
     LLMRequestError,
@@ -36,12 +37,25 @@ MAX_JOBS_TOTAL = 60
 
 logger = logging.getLogger("job_discovery_agent")
 
-# Companies are scraped one at a time, deliberately not in parallel. A ThreadPoolExecutor-based
-# version was tried and reverted: Playwright's sync API proved unreliable under concurrent
-# threads on this setup (a real 30+ minute hang was observed, not just slowness), and even before
-# that, concurrent LLM calls all draw from one shared rate-limit budget (e.g. Gemini free tier's
-# 15 requests/minute total, not per company) — so concurrency there doesn't add real throughput,
-# it just causes contention. Sequential is slower (5-11 min for ~25 companies) but reliable.
+# Companies are rendered concurrently (bounded, see RENDER_CONCURRENCY below) using Playwright's
+# async API against one shared browser instance. An earlier attempt at concurrency instead ran
+# Playwright's *sync* API from a ThreadPoolExecutor — the sync API is not thread-safe, and that
+# caused a real 30+ minute hang, not just slowness. The async API's single-event-loop model
+# avoids that failure mode.
+#
+# LLM extraction calls are still the real bottleneck: they draw from a shared per-key rate-limit
+# budget (e.g. Gemini free tier's 15 requests/minute per key). LLM_CONCURRENCY below is capped to
+# the number of configured Gemini keys (round-robined in crewai_client.py) so concurrent calls
+# don't just queue up behind the same limit — an optional second key roughly doubles that budget.
+RENDER_CONCURRENCY = 4
+
+
+def _llm_concurrency() -> int:
+    if settings.llm_provider == "gemini":
+        return 2 if settings.gemini_api_key_2 else 1
+    # Non-Gemini providers aren't round-robined across keys here; a modest default lets browser
+    # rendering and LLM calls overlap without assuming a specific provider's rate limit.
+    return 3
 
 
 class JobDiscoveryAgent:
@@ -55,35 +69,16 @@ class JobDiscoveryAgent:
 
         db.query(Job).filter(Job.candidate_id == candidate.id).delete()
 
-        jobs: list[Job] = []
         companies_to_scrape = scrapeable[:MAX_COMPANIES_SCRAPED]
-        run_start = time.monotonic()
         logger.info("Job discovery starting: %d companies to scrape", len(companies_to_scrape))
 
-        for i, company in enumerate(companies_to_scrape, start=1):
-            if len(jobs) >= MAX_JOBS_TOTAL:
-                logger.info("Hit MAX_JOBS_TOTAL=%d, stopping early", MAX_JOBS_TOTAL)
-                break
+        company_results = asyncio.run(self._discover_all(companies_to_scrape))
 
-            company_start = time.monotonic()
-            listings_with_details = self._process_company(company)
-            elapsed = time.monotonic() - company_start
-            total_elapsed = time.monotonic() - run_start
-
+        jobs: list[Job] = []
+        for company, listings_with_details in company_results:
             if listings_with_details is None:
                 skipped.append(company.name)
-                logger.info(
-                    "[%d/%d] %s: SKIPPED (unreadable) in %.1fs | total elapsed %.1fs",
-                    i, len(companies_to_scrape), company.name, elapsed, total_elapsed,
-                )
                 continue
-
-            logger.info(
-                "[%d/%d] %s: %d listing(s) in %.1fs | total jobs so far %d | total elapsed %.1fs",
-                i, len(companies_to_scrape), company.name, len(listings_with_details), elapsed,
-                len(jobs), total_elapsed,
-            )
-
             for listing, details in listings_with_details:
                 if len(jobs) >= MAX_JOBS_TOTAL:
                     break
@@ -155,6 +150,48 @@ class JobDiscoveryAgent:
             db.refresh(j)
         return jobs, skipped
 
+    @classmethod
+    async def _discover_all(
+        cls, companies: list[Company]
+    ) -> list[tuple[Company, list[tuple[dict, dict]] | None]]:
+        """Processes every company concurrently (bounded by RENDER_CONCURRENCY for browser
+        rendering and _llm_concurrency() for LLM calls) against one shared browser instance."""
+        from playwright.async_api import async_playwright
+
+        run_start = time.monotonic()
+        render_semaphore = asyncio.Semaphore(RENDER_CONCURRENCY)
+        llm_semaphore = asyncio.Semaphore(_llm_concurrency())
+        completed = 0
+        completed_lock = asyncio.Lock()
+
+        async def _run_one(company: Company):
+            nonlocal completed
+            company_start = time.monotonic()
+            result = await cls._process_company(company, browser, render_semaphore, llm_semaphore)
+            elapsed = time.monotonic() - company_start
+            async with completed_lock:
+                completed += 1
+                total_elapsed = time.monotonic() - run_start
+                if result is None:
+                    logger.info(
+                        "[%d/%d] %s: SKIPPED (unreadable) in %.1fs | total elapsed %.1fs",
+                        completed, len(companies), company.name, elapsed, total_elapsed,
+                    )
+                else:
+                    logger.info(
+                        "[%d/%d] %s: %d listing(s) in %.1fs | total elapsed %.1fs",
+                        completed, len(companies), company.name, len(result), elapsed, total_elapsed,
+                    )
+            return company, result
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                tasks = [_run_one(company) for company in companies]
+                return await asyncio.gather(*tasks)
+            finally:
+                await browser.close()
+
     @staticmethod
     def _apify_query(candidate: Candidate) -> tuple[str | None, str]:
         """Derives (role, location) for the Apify job-board search from the candidate's own
@@ -187,12 +224,15 @@ class JobDiscoveryAgent:
         return company
 
     @classmethod
-    def _process_company(cls, company: Company) -> list[tuple[dict, dict]] | None:
-        """Runs on a worker thread: discovers this company's listings, then visits each
-        listing's own detail page. Returns a list of (listing, details) pairs, or None if the
-        company's careers page couldn't be read at all (distinct from "read but had zero
-        listings", which returns an empty list)."""
-        listings = cls._discover_listings(company)
+    async def _process_company(
+        cls, company: Company, browser, render_semaphore: asyncio.Semaphore,
+        llm_semaphore: asyncio.Semaphore,
+    ) -> list[tuple[dict, dict]] | None:
+        """Discovers this company's listings, then visits each listing's own detail page.
+        Returns a list of (listing, details) pairs, or None if the company's careers page
+        couldn't be read at all (distinct from "read but had zero listings", which returns an
+        empty list)."""
+        listings = await cls._discover_listings(company, browser, render_semaphore, llm_semaphore)
         if listings is None:
             return None
 
@@ -202,7 +242,7 @@ class JobDiscoveryAgent:
                 # A job with no title, or no verified link to its own posting, can't be taken
                 # to "the exact job post" — skip it rather than show a broken/missing link.
                 continue
-            details = cls._fetch_details(listing)
+            details = await cls._fetch_details(listing, browser, render_semaphore, llm_semaphore)
             pairs.append((listing, details))
         return pairs
 
@@ -213,7 +253,10 @@ class JobDiscoveryAgent:
     MAX_LISTING_PAGE_HOPS = 3
 
     @classmethod
-    def _discover_listings(cls, company: Company) -> list[dict] | None:
+    async def _discover_listings(
+        cls, company: Company, browser, render_semaphore: asyncio.Semaphore,
+        llm_semaphore: asyncio.Semaphore,
+    ) -> list[dict] | None:
         """Returns the basic listings for a company's careers page, or None if it couldn't be
         read/extracted at all. An empty list means the page was genuinely read and the LLM
         confirmed no listings — distinct from None, which means the attempt failed (page
@@ -231,12 +274,16 @@ class JobDiscoveryAgent:
             visited.add(url)
 
             try:
-                page = fetch_rendered_page(url)
+                async with render_semaphore:
+                    page = await fetch_rendered_page_async(browser, url)
             except BrowserFetchError:
                 break
 
             try:
-                listings = extract_job_listings(company.name, page["text"], page["links"])
+                async with llm_semaphore:
+                    listings = await asyncio.to_thread(
+                        extract_job_listings, company.name, page["text"], page["links"]
+                    )
             except LLMRequestError:
                 break
 
@@ -250,13 +297,20 @@ class JobDiscoveryAgent:
         return last_listings if got_confirmed_result else None
 
     @staticmethod
-    def _fetch_details(listing: dict) -> dict:
+    async def _fetch_details(
+        listing: dict, browser, render_semaphore: asyncio.Semaphore,
+        llm_semaphore: asyncio.Semaphore,
+    ) -> dict:
         """Best-effort visit to a listing's own detail page; returns {} if unavailable."""
         job_url = listing.get("job_url")
         if not job_url:
             return {}
         try:
-            detail_page = fetch_rendered_page(job_url)
-            return extract_job_description(listing["title"], detail_page["text"])
+            async with render_semaphore:
+                detail_page = await fetch_rendered_page_async(browser, job_url)
+            async with llm_semaphore:
+                return await asyncio.to_thread(
+                    extract_job_description, listing["title"], detail_page["text"]
+                )
         except (BrowserFetchError, LLMRequestError):
             return {}

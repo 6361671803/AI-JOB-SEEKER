@@ -15,8 +15,10 @@ Provider model-string format (verified live, not assumed from docs):
   OpenRouter: "openrouter/<model>"  — routed through CrewAI's LiteLLM integration.
   Ollama:     "ollama/<model>"      — routed through CrewAI's LiteLLM integration, base_url only.
 """
+import itertools
 import logging
 import re
+import threading
 import time
 from typing import Type, TypeVar
 
@@ -29,6 +31,21 @@ logger = logging.getLogger("crewai_client")
 MAX_RATE_LIMIT_RETRIES = 3
 
 T = TypeVar("T", bound=BaseModel)
+
+# Round-robins between GEMINI_API_KEY and the optional GEMINI_API_KEY_2 so concurrent Job
+# Discovery calls spread across two separate rate-limit budgets instead of one. If only one key
+# is configured, this always returns that same key — identical to the old single-key behavior.
+_gemini_key_cycle_lock = threading.Lock()
+_gemini_key_cycle = None
+
+
+def _next_gemini_key() -> str:
+    global _gemini_key_cycle
+    with _gemini_key_cycle_lock:
+        if _gemini_key_cycle is None:
+            keys = [k for k in (settings.gemini_api_key, settings.gemini_api_key_2) if k]
+            _gemini_key_cycle = itertools.cycle(keys)
+        return next(_gemini_key_cycle)
 
 
 class LLMNotConfiguredError(RuntimeError):
@@ -55,7 +72,7 @@ def _build_llm():
             raise LLMNotConfiguredError(
                 "GEMINI_API_KEY is not set. Add it to backend/.env (see backend/.env.example)."
             )
-        return LLM(model=f"gemini/{settings.llm_model}", api_key=settings.gemini_api_key)
+        return LLM(model=f"gemini/{settings.llm_model}", api_key=_next_gemini_key())
 
     if provider == "openrouter":
         if not settings.openrouter_api_key:
