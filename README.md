@@ -14,15 +14,15 @@ Manually checking dozens of individual company career pages, judging how well ea
 
 - Every job listing traces back to a link that was actually found on a real, rendered page.
 - Every skill match is a literal string comparison against the resume's own extracted text — no LLM guessing.
-- Two separate, explicit human approvals are required: one before any application preparation begins, and a second, independent one before a job is ever marked as submitted.
-- No code path anywhere in the application clicks a final "Submit" button.
+- An explicit human approval is required before any application preparation begins.
+- No code path anywhere in the application clicks a final "Submit" button, and the app does not track whether or when a job is actually submitted — that happens entirely on the official site, by the user.
 
 ## How It Works
 
 ```
 Resume Upload → Preferences → Company Discovery → Job Discovery → Matching & Ranking
-      → User Selects Jobs → ★ Approval #1 → Application Preparation
-      → Final Review → ★ Approval #2 → Job Marked Submitted
+      → User Selects Jobs → ★ Approval → Application Preparation
+      → Screenshot + Official Link Shown → User Applies Themselves
 ```
 
 1. **Resume Upload & Parsing** — extracts structured data (skills, education, experience, projects) from a PDF/DOCX resume without inventing anything not in the source document.
@@ -31,9 +31,9 @@ Resume Upload → Preferences → Company Discovery → Job Discovery → Matchi
 4. **Job Discovery** — renders each company's career page with a real headless browser (Playwright), extracts individual job listings (never navigation/category links), follows through to the real ATS board when the landing page is just a search widget, then visits each job's own detail page for its actual requirements. Optionally augmented with LinkedIn listings via Apify.
 5. **Matching & Ranking** — scores every job with a six-factor weighted formula: skills (deterministic whole-word matching), semantic similarity (real Gemini embeddings + cosine similarity), education, experience, and role fit (LLM judgment, grounded in the job's own text), and location (deterministic rule-based comparison).
 6. **Application Preparation** — opens the job's official application page with a real headless browser (Playwright) and captures a screenshot so the user has a visual record of it before applying. It does not inspect, fill in, or submit any form field — the application itself is always completed by the user on the official site, and it never logs in on the user's behalf — see Honest Limitations below.
-7. **Two-Gate Human Approval** — enforced at the backend state-machine level, not just the UI: Approval #1 gates whether any automation runs at all; Approval #2 (an explicit confirmation) gates whether a job is ever marked submitted.
+7. **Human Approval Gate** — enforced at the backend state-machine level, not just the UI: the user must explicitly approve before any application preparation runs at all.
 
-Every job's status (discovery through submission/failure) is persisted in the database throughout, since both approval gates are enforced against it — there is no dedicated tracker page in the UI.
+Every job's status is persisted in the database throughout, since the approval gate is enforced against it — there is no dedicated tracker page in the UI, and the app does not track whether or when a job was actually submitted.
 
 ## Technology Stack
 
@@ -51,7 +51,7 @@ Every job's status (discovery through submission/failure) is persisted in the da
 
 ## Key Engineering Decisions
 
-- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the two approval gates below stay fully deterministic.
+- **CrewAI orchestrates every LLM call, but never decides anything on its own** — each of the 7 structured-extraction calls in the app is one narrow, pre-defined `Agent` + `Task`, invoked at one specific point in a linear, human-gated pipeline. No autonomous planning, no dynamic tool-calling loop — deliberately, so the approval gate below stays fully deterministic.
 - **JSON-schema-constrained LLM extraction** — every LLM call forces strict, schema-valid JSON output, never free-form prose.
 - **Deterministic anti-hallucination backstops layered under every LLM call** — whole-word skill matching, URL grounding (a link must literally appear on the rendered page), date grounding (a date must be a verbatim substring of the page text), a hard-coded third-party job-board domain blocklist, and a place-name filter.
 - **Two-stage job extraction** — listing-page fields (title/location/link) are extracted separately from detail-page fields (requirements/skills), since asking one call to guess fields that aren't actually on that page caused fabricated data during development.
@@ -141,6 +141,7 @@ This starts the backend (`uvicorn app.main:app --port 8000`) and frontend (`vite
 - Single-user, local application — no authentication/multi-user support, no production deployment configuration.
 - Does not inspect, fill in, or upload/attach anything into a real application form — Application Preparation only opens the official page and screenshots it. Every field, including the resume file itself, is entered by the user.
 - Does not log in and cannot submit an application on the user's behalf — by design. Any application must be completed manually by the user.
+- Does not track whether or when an application was actually submitted — the earlier "mark as submitted" confirmation step was removed entirely; the app stops at showing the screenshot and the official link.
 
 ## License
 
