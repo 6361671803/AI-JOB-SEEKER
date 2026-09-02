@@ -28,7 +28,7 @@ from app.services.search_client import SearchNotConfiguredError, SearchRequestEr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 
-app = FastAPI(title="Agentic Job Finder API")
+app = FastAPI(title="Job Discovery & Matching Assistant API")
 
 app.add_middleware(
     CORSMiddleware,

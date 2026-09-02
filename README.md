@@ -1,4 +1,4 @@
-# Agentic Job Finder and Application Assistant
+# Job Discovery & Matching Assistant
 ##demo video on youtube:https://youtu.be/2jT2LQv41R8
 A multi-agent AI system that automates the most time-consuming parts of a job search: discovering real companies and job openings, and matching them against a candidate's resume with an explainable score. That match screen — score, job description, job details, and skill match — is the end of the pipeline; the project does not select jobs, prepare applications, or touch a real application form in any way.
 

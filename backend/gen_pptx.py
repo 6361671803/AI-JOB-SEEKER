@@ -140,7 +140,7 @@ tf.vertical_anchor = MSO_ANCHOR.MIDDLE
 box = s.shapes.add_textbox(Inches(1), Inches(3.3), Inches(11.3), Inches(1.6))
 tf = box.text_frame; tf.word_wrap = True
 p = tf.paragraphs[0]
-p.text = "Agentic Job Finder and Application Assistant"
+p.text = "Job Discovery & Matching Assistant"
 p.font.size = Pt(36); p.font.bold = True; p.font.color.rgb = WHITE
 p.alignment = PP_ALIGN.CENTER
 
