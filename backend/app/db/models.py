@@ -73,7 +73,8 @@ class Job(Base):
     job_url: Mapped[str | None] = mapped_column(String, nullable=True)
     application_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Tracker status: DISCOVERED, MATCHED, SELECTED, PREPARING, WAITING_FOR_REVIEW, SUBMITTED, FAILED.
+    # Status: DISCOVERED, MATCHED, SELECTED, PREPARING, WAITING_FOR_REVIEW, FAILED. SUBMITTED is
+    # historical only — no code path sets it anymore since the mark-submitted step was removed.
     status: Mapped[str] = mapped_column(String, default="DISCOVERED")
 
     # Resume/Job Matching Agent output (Phase 6) — null until matched.

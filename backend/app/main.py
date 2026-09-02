@@ -25,7 +25,6 @@ from app.models.schemas import (
     CandidateResponse,
     CompanyDiscoveryResponse,
     JobDiscoveryResponse,
-    MarkSubmittedInput,
     PreferenceInput,
     PreferenceResponse,
     ReviewFieldUpdateInput,
@@ -480,39 +479,6 @@ def update_review_fields(
     existing.update({k: v for k, v in payload.fields.items() if v is not None})
     job.user_provided_fields_json = json.dumps(existing)
     job.reviewed_at = datetime.now(timezone.utc)
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    return _application_preparation_response(job)
-
-
-@app.post(
-    "/api/candidate/{candidate_id}/jobs/{job_id}/mark-submitted",
-    response_model=ApplicationPreparation,
-)
-def mark_submitted(
-    candidate_id: str, job_id: str, payload: MarkSubmittedInput, db: Session = Depends(get_db)
-) -> ApplicationPreparation:
-    """Records that the candidate reviewed and submitted this application themselves on the
-    official site. This endpoint never submits anything on the candidate's behalf — it only
-    requires an explicit confirmation flag before updating the tracker."""
-    if not payload.confirmed:
-        raise HTTPException(
-            status_code=400,
-            detail="Explicit confirmation is required (confirmed=true) before marking an "
-            "application as submitted.",
-        )
-
-    job = _get_job_or_404(db, candidate_id, job_id)
-    if job.status != "WAITING_FOR_REVIEW":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job must be prepared and awaiting review first (current status: {job.status}).",
-        )
-
-    job.status = "SUBMITTED"
-    job.submitted_at = datetime.now(timezone.utc)
     db.add(job)
     db.commit()
     db.refresh(job)

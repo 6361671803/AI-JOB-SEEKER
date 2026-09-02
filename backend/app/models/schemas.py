@@ -205,7 +205,7 @@ class ApplicationPreparation(BaseModel):
     title: str
     application_url: str | None = None
     platform: str
-    status: str  # WAITING_FOR_REVIEW | SUBMITTED | FAILED
+    status: str  # WAITING_FOR_REVIEW | FAILED (SUBMITTED is historical only)
     message: str
     fields: list[PreparedField] = Field(default_factory=list)
     fields_completed: int = 0
@@ -215,10 +215,6 @@ class ApplicationPreparation(BaseModel):
 
 class ReviewFieldUpdateInput(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)  # label -> user-provided value
-
-
-class MarkSubmittedInput(BaseModel):
-    confirmed: bool = False
 
 
 class TrackerEntry(BaseModel):

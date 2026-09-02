@@ -1,34 +1,10 @@
 import { useState } from "react";
-import { markSubmitted, prepareApplication, screenshotUrl } from "../api/client";
-import { useToast } from "../context/ToastContext";
+import { prepareApplication, screenshotUrl } from "../api/client";
 
-function FinalReview({ candidateId, prep, onUpdate }) {
-  const [reviewed, setReviewed] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
-  const notify = useToast();
-
-  const handleMarkSubmitted = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const updated = await markSubmitted(candidateId, prep.job_id);
-      onUpdate(updated);
-      notify("Application tracked as submitted.", "success");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const isSubmitted = prep.status === "SUBMITTED";
-
+function FinalReview({ candidateId, prep }) {
   return (
     <div className="prep-result">
-      <p className="prep-ready-banner">
-        {isSubmitted ? "✓ Marked as Submitted" : "Application Ready for Review"}
-      </p>
+      <p className="prep-ready-banner">Application Ready for Review</p>
       <p className="job-meta">Platform detected: {prep.platform}</p>
       <p className="job-meta">{prep.message}</p>
 
@@ -66,30 +42,13 @@ function FinalReview({ candidateId, prep, onUpdate }) {
         </p>
       )}
 
-      {error && <p className="error-text">{error}</p>}
-
-      {!isSubmitted ? (
-        <div className="approval-notice">
-          <p style={{ fontWeight: 650 }}>IMPORTANT — the application has NOT been submitted.</p>
-          <label className="radio-option">
-            <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />
-            I have reviewed this application.
-          </label>
-          <p className="hint">
-            This app never submits anything for you (Approval #2). Go apply on the official page
-            above, then come back and confirm here so it's tracked correctly.
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={handleMarkSubmitted}
-            disabled={!reviewed || submitting}
-          >
-            {submitting ? "Saving..." : "I've Submitted This Application"}
-          </button>
-        </div>
-      ) : (
-        <p className="unknown">This application is tracked as submitted.</p>
-      )}
+      <div className="approval-notice">
+        <p style={{ fontWeight: 650 }}>IMPORTANT — this app never submits anything for you.</p>
+        <p className="hint">
+          Go apply on the official page above yourself. This app does not track whether or when
+          you actually submit it.
+        </p>
+      </div>
     </div>
   );
 }
@@ -110,10 +69,6 @@ export default function ApplicationPreparation({ candidateId, selectedJobs }) {
     } finally {
       setPreparingId(null);
     }
-  };
-
-  const handleUpdate = (jobId, updated) => {
-    setPreparations((prev) => ({ ...prev, [jobId]: updated }));
   };
 
   return (
@@ -149,13 +104,7 @@ export default function ApplicationPreparation({ candidateId, selectedJobs }) {
 
               {errors[job.id] && <p className="error-text">{errors[job.id]}</p>}
 
-              {prep && (
-                <FinalReview
-                  candidateId={candidateId}
-                  prep={prep}
-                  onUpdate={(updated) => handleUpdate(job.id, updated)}
-                />
-              )}
+              {prep && <FinalReview candidateId={candidateId} prep={prep} />}
             </div>
           );
         })}
